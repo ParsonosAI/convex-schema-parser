@@ -1,0 +1,30 @@
+cabal-version:   3.0
+name:            convex-schema-parser
+version:         0.1.0.0
+license:         NONE
+author:          Norbert Dzikowski
+maintainer:      lambdax.one@icloud.com
+build-type:      Simple
+extra-doc-files: CHANGELOG.md
+
+common warnings
+    ghc-options: -Wall
+
+library convex-schema-parser-lib
+    import:           warnings
+    exposed-modules:  Convex.Schema.Parser
+        , Backend.Python
+    build-depends:    base
+        , parsec
+        , mtl
+        , containers
+    hs-source-dirs:   src
+    default-language: Haskell2010
+
+executable convex-schema-parser
+    main-is:          Main.hs
+    build-depends:    base,
+                      convex-schema-parser-lib,
+                      parsec
+    hs-source-dirs:   app
+    default-language: Haskell2010
