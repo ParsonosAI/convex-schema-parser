@@ -28,7 +28,8 @@ executable convex-schema-parser
     main-is:          Main.hs
     build-depends:    base,
                       convex-schema-parser-lib,
-                      parsec
+                      parsec,
+                      optparse-applicative
     hs-source-dirs:   app
     default-language: Haskell2010
 
