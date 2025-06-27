@@ -1,4 +1,3 @@
--- app/Main.hs
 module Main (main) where
 
 import qualified Backend.Python as Python
@@ -10,7 +9,7 @@ import System.Exit (exitFailure)
 data GenTarget = Python | Rust deriving (Show, Eq, Enum, Bounded)
 
 availableTargets :: String
-availableTargets = "Available: " ++ intercalate ", " (map show [minBound :: GenTarget .. maxBound :: GenTarget])
+availableTargets = "Available: " ++ intercalate ", " (map show [(minBound :: GenTarget) ..])
 
 instance Read GenTarget where
   readsPrec _ "Python" = [(Python, "")]
@@ -20,7 +19,8 @@ instance Read GenTarget where
 data CliOptions = CliOptions
   { schemaPath :: FilePath,
     declarationsDir :: FilePath,
-    target :: GenTarget
+    target :: GenTarget,
+    outputFile :: Maybe FilePath
   }
 
 cliOptionsParser :: Parser CliOptions
@@ -41,7 +41,16 @@ cliOptionsParser =
       ( long "target"
           <> metavar "TARGET"
           <> value Python
-          <> help ("Target language for code generation " ++ availableTargets)
+          <> showDefault
+          <> help ("Target language for code generation. " ++ availableTargets)
+      )
+    <*> optional
+      ( strOption
+          ( long "output"
+              <> short 'o'
+              <> metavar "OUTPUT_FILE"
+              <> help "File to write the generated code to (prints to stdout if omitted)"
+          )
       )
 
 main :: IO ()
@@ -56,7 +65,9 @@ main = do
       case target opts of
         Python -> do
           let pythonCode = Python.generatePythonCode project
-          putStrLn pythonCode
+          case outputFile opts of
+            Just path -> writeFile path pythonCode
+            Nothing -> putStrLn pythonCode
         Rust ->
           putStrLn "Rust backend not yet implemented."
   where

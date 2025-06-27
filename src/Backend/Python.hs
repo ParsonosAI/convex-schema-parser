@@ -6,7 +6,7 @@ import qualified Convex.Action.Parser as Action
 import qualified Convex.Parser as P
 import qualified Convex.Schema.Parser as Schema
 import Data.Char (isUpper, toLower, toUpper)
-import Data.List (intercalate, nub)
+import Data.List (intercalate, isPrefixOf, nub)
 import qualified Data.Map as Map
 
 generatePythonCode :: P.ParsedProject -> String
@@ -14,7 +14,7 @@ generatePythonCode project =
   let (nestedModelsFromFunctions, functionCode) = generateAllFunctions (P.ppFunctions project)
       (constantsCode, nestedModelsFromConstants) = generateAllConstants (P.ppConstants project)
       (schemaCode, nestedModelsFromSchema) = generateAllTables (P.ppSchema project)
-      allNestedCode = unlines . nub $ nestedModelsFromFunctions ++ nestedModelsFromConstants ++ nestedModelsFromSchema
+      allNestedCode = unlines . nub $ nestedModelsFromSchema ++ nestedModelsFromFunctions ++ nestedModelsFromConstants
       aliasesCode = generateAliases (P.ppSchema project)
       apiClassCode = generateApiClass functionCode
    in unlines
@@ -30,14 +30,11 @@ generatePythonCode project =
 generateHeader :: String
 generateHeader =
   unlines
-    [ "from pydantic import BaseModel, Field, ValidationError",
+    [ "from pydantic import BaseModel, Field, ValidationError, TypeAdapter",
       "from typing import Any, Generic, TypeVar, Literal",
       "from pydantic_core import core_schema",
+      "from convex import ConvexClient",
       "",
-      "# ConvexClient interface, you will inject your instantiation in the API wrapper.",
-      "class ConvexClient:",
-      "    def query(self, name: str, args: dict) -> Any: ...",
-      "    def mutation(self, name: str, args: dict) -> Any: ...",
       "",
       "T = TypeVar('T')",
       "class Id(str, Generic[T]):",
@@ -95,9 +92,9 @@ generateAllFunctions funcs =
 -- | Generates the code for a single Python function wrapper.
 generateFunction :: Action.ConvexFunction -> ([String], String)
 generateFunction func =
-  let (argSignature, payloadMapping) = generateArgSignature (Action.funcArgs func)
+  let (argSignature, payloadMapping, nestedFromArgs) = generateArgSignature (Action.funcArgs func)
       funcNameSnake = toSnakeCase (Action.funcName func)
-      (returnHint, isModelReturn, nested) = getReturnType (Action.funcName func) (Action.funcReturn func)
+      (rawReturnHint, isModelReturn, nestedFromReturn) = getReturnType (Action.funcName func) (Action.funcReturn func)
 
       handlerCall = case Action.funcType func of
         Action.Query -> "self.client.query"
@@ -106,21 +103,45 @@ generateFunction func =
 
       fullFuncPath = "\"" ++ Action.funcPath func ++ ":" ++ Action.funcName func ++ "\""
 
-      validationBlock =
-        if isModelReturn
-          then "            return " ++ returnHint ++ ".model_validate(raw_result)"
-          else "            return raw_result"
+      -- Determine the final return type hint and the body of the `try` block.
+      (finalReturnHint, tryBlock) = case Action.funcReturn func of
+        Schema.VVoid ->
+          ( "None",
+            unlines
+              [ "            " ++ handlerCall ++ "(" ++ fullFuncPath ++ ", payload)",
+                "            return"
+              ]
+          )
+        _ ->
+          let hint = rawReturnHint
+              -- This `validationLogic` creates the Python expression to transform the raw result.
+              validationLogic =
+                if isModelReturn
+                  then
+                    if "list[" `isPrefixOf` rawReturnHint
+                      then
+                        -- For lists of models, we use a Pydantic TypeAdapter.
+                        "TypeAdapter(" ++ rawReturnHint ++ ").validate_python(raw_result)"
+                      else
+                        -- For single models, we use .model_validate().
+                        rawReturnHint ++ ".model_validate(raw_result)"
+                  else
+                    -- For primitive types, we just return the raw result.
+                    "raw_result"
+              body =
+                unlines
+                  [ "            raw_result = " ++ handlerCall ++ "(" ++ fullFuncPath ++ ", payload)",
+                    "            return " ++ validationLogic
+                  ]
+           in (hint, body)
 
       funcCode =
         unlines
-          [ "    def " ++ funcNameSnake ++ "(self, " ++ argSignature ++ ") -> " ++ returnHint ++ " | None:",
+          [ "    def " ++ funcNameSnake ++ "(self, " ++ argSignature ++ ") -> " ++ finalReturnHint ++ ":",
             "        \"\"\"Wraps the " ++ fullFuncPath ++ " " ++ show (Action.funcType func) ++ ".\"\"\"",
             "        payload: dict[str, Any] = {" ++ payloadMapping ++ "}",
             "        try:",
-            "            raw_result = " ++ handlerCall ++ "(" ++ fullFuncPath ++ ", payload)",
-            "            if raw_result is None:",
-            "                return None",
-            validationBlock,
+            tryBlock,
             "        except ValidationError as e:",
             "            print(f\"Validation error in '" ++ funcNameSnake ++ "': {e}\")",
             "            raise",
@@ -129,7 +150,7 @@ generateFunction func =
             "            raise",
             ""
           ]
-   in (nested, funcCode)
+   in (nestedFromArgs ++ nestedFromReturn, funcCode)
 
 -- | Generates the `api` class that namespaces all the generated functions.
 generateApiClass :: String -> String
@@ -145,13 +166,13 @@ generateApiClass functionCode =
    in unlines (header ++ [functionCode])
 
 -- Helper to generate Python function arguments and the payload dictionary mapping.
-generateArgSignature :: [(String, Schema.ConvexType)] -> (String, String)
+generateArgSignature :: [(String, Schema.ConvexType)] -> (String, String, [String])
 generateArgSignature args =
-  let sigParts = map (\(n, t) -> toSnakeCase n ++ ": " ++ fst4 (toPythonTypeParts n t)) args
-      payloadParts = map (\(n, _) -> "\"" ++ n ++ "\": " ++ toSnakeCase n) args
-   in (intercalate ", " sigParts, intercalate ", " payloadParts)
-  where
-    fst4 (a, _, _, _) = a
+  let results = map (\(n, t) -> (n, toPythonTypeParts n t)) args
+      sigParts = map (\(n, (t, _, _, _)) -> toSnakeCase n ++ ": " ++ t) results
+      payloadParts = map (\(n, _) -> "\"" ++ n ++ "\": " ++ toSnakeCase n) results
+      nestedModels = concatMap (\(_, (_, _, _, n)) -> n) results
+   in (intercalate ", " sigParts, intercalate ", " payloadParts, nestedModels)
 
 -- Helper to get the return type information.
 getReturnType :: String -> Schema.ConvexType -> (String, Bool, [String])
@@ -200,7 +221,7 @@ toPythonTypeParts nameHint typ = case typ of
     let className = capitalize nameHint ++ "Object"
         (fieldLines, nested) = unzip $ map (generateField className) (map (\(n, t) -> Schema.Field n t) fields)
         newModel = unlines $ ["class " ++ className ++ "(BaseModel):"] ++ fieldLines
-     in (className, False, False, newModel : concat nested)
+     in (className, False, False, concat nested ++ [newModel])
   Schema.VVoid -> ("None", True, False, [])
 
 capitalize :: String -> String
