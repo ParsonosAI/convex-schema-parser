@@ -1,136 +1,225 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Backend.Python
-  ( generatePythonCode,
-  )
-where
+module Backend.Python (generatePythonCode) where
 
-import qualified Convex.Schema.Parser as AST
-import qualified Data.Char as Ch
+import qualified Convex.Action.Parser as Action
+import qualified Convex.Parser as P
+import qualified Convex.Schema.Parser as Schema
+import Data.Char (isUpper, toLower, toUpper)
 import Data.List (intercalate, nub)
 import qualified Data.Map as Map
 
-generatePythonCode :: AST.ParsedFile -> String
-generatePythonCode parsed =
-  let -- We will assume conventional naming and strip the last `s` in table names
-      -- to generate class names.
-      -- First, generate the table models and collect all nested models that are created.
-      (tableCode, nestedModels) = generateAllTables $ AST.parsedSchema parsed
-      -- Also collect any nested models from the top-level constants.
-      (constantsCode, nestedFromConstants) = generateAllConstants $ AST.parsedConstants parsed
-      -- Combine and deduplicate all nested model definitions.
-      allNestedCode = unlines . nub $ nestedModels ++ nestedFromConstants
+generatePythonCode :: P.ParsedProject -> String
+generatePythonCode project =
+  let (nestedModelsFromFunctions, functionCode) = generateAllFunctions (P.ppFunctions project)
+      (constantsCode, nestedModelsFromConstants) = generateAllConstants (P.ppConstants project)
+      (schemaCode, nestedModelsFromSchema) = generateAllTables (P.ppSchema project)
+      allNestedCode = unlines . nub $ nestedModelsFromFunctions ++ nestedModelsFromConstants ++ nestedModelsFromSchema
+      aliasesCode = generateAliases (P.ppSchema project)
+      apiClassCode = generateApiClass functionCode
    in unlines
         [ generateHeader,
           constantsCode,
           allNestedCode,
-          tableCode
+          schemaCode,
+          aliasesCode,
+          apiClassCode
         ]
 
 -- | Generates the static header for the Python file.
 generateHeader :: String
 generateHeader =
   unlines
-    [ "from pydantic import BaseModel, Field",
+    [ "from pydantic import BaseModel, Field, ValidationError",
       "from typing import Any, Generic, TypeVar, Literal",
       "from pydantic_core import core_schema",
       "",
+      "# ConvexClient interface, you will inject your instantiation in the API wrapper.",
+      "class ConvexClient:",
+      "    def query(self, name: str, args: dict) -> Any: ...",
+      "    def mutation(self, name: str, args: dict) -> Any: ...",
+      "",
       "T = TypeVar('T')",
-      "",
       "class Id(str, Generic[T]):",
-      "    \"\"\"A Pydantic-compatible wrapper for Convex document IDs that behaves like a string.\"\"\"",
-      "",
       "    @classmethod",
-      "    def __get_pydantic_core_schema__(",
-      "        cls, source_type: Any, handler: Any",
-      "    ) -> core_schema.CoreSchema:",
+      "    def __get_pydantic_core_schema__(cls, s, h) -> core_schema.CoreSchema:",
       "        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())",
       ""
     ]
 
-generateAllConstants :: Map.Map String AST.ConvexType -> (String, [String])
+-- | Generates Python type aliases for all the named constants.
+generateAllConstants :: Map.Map String Schema.ConvexType -> (String, [String])
 generateAllConstants constants =
   let results = map (generateConstant . fst) (Map.toList constants)
-      code = unlines $ map fst results
-      nested = concatMap snd results
-   in (code, nested)
+   in (unlines $ map fst results, concatMap snd results)
   where
-    generateConstant :: String -> (String, [String])
     generateConstant name =
       let constType = constants Map.! name
-          (pyType, _, _, nestedModels) = toPythonTypeParts name constType
-       in (name ++ " = " ++ pyType, nestedModels)
+          (pyType, _, _, nested) = toPythonTypeParts name constType
+       in (name ++ " = " ++ pyType, nested)
 
-generateAllTables :: AST.Schema -> (String, [String])
-generateAllTables (AST.Schema tables) =
+-- | Generates Pydantic BaseModel classes for all tables.
+generateAllTables :: Schema.Schema -> (String, [String])
+generateAllTables (Schema.Schema tables) =
   let results = map generateTable tables
-      tableCode = unlines $ map fst results
-      nestedModels = concatMap snd results
-   in (tableCode, nestedModels)
+   in (unlines $ map fst results, concatMap snd results)
 
-generateTable :: AST.Table -> (String, [String])
+-- | Generates a single Pydantic BaseModel class for a table.
+generateTable :: Schema.Table -> (String, [String])
 generateTable table =
-  let className = capitalize (AST.tableName table)
-      (fieldLines, nestedModels) = unzip $ map (generateField className) (AST.tableFields table)
+  let className = toClassName (Schema.tableName table)
+      (fieldLines, nestedModels) = unzip $ map (generateField className) (Schema.tableFields table)
       tableCode =
         unlines
           [ "class " ++ className ++ "(BaseModel):",
-            "    \"\"\"Document type for the '" ++ AST.tableName table ++ "' table. Validated by Pydantic.\"\"\"",
             "    _id: Id['" ++ className ++ "']",
             "    _creationTime: float",
             unlines fieldLines
           ]
    in (tableCode, concat nestedModels)
 
-capitalize :: String -> String
-capitalize "" = ""
-capitalize (c : cs) = Ch.toUpper c : cs
+-- | Generates singular type aliases for all table documents.
+generateAliases :: Schema.Schema -> String
+generateAliases (Schema.Schema tables) =
+  let header = "\n# --- Singular Type Aliases for Ergonomics ---\n"
+   in header ++ (unlines $ map toAlias tables)
+  where
+    toAlias t = toSingular (Schema.tableName t) ++ " = " ++ toClassName (Schema.tableName t)
 
-generateField :: String -> AST.Field -> (String, [String])
+-- | Generates a typed Python function for each Convex function.
+generateAllFunctions :: [Action.ConvexFunction] -> ([String], String)
+generateAllFunctions funcs =
+  let results = map generateFunction funcs
+   in (concatMap fst results, unlines $ map snd results)
+
+-- | Generates the code for a single Python function wrapper.
+generateFunction :: Action.ConvexFunction -> ([String], String)
+generateFunction func =
+  let (argSignature, payloadMapping) = generateArgSignature (Action.funcArgs func)
+      funcNameSnake = toSnakeCase (Action.funcName func)
+      (returnHint, isModelReturn, nested) = getReturnType (Action.funcName func) (Action.funcReturn func)
+
+      handlerCall = case Action.funcType func of
+        Action.Query -> "self.client.query"
+        Action.Mutation -> "self.client.mutation"
+        Action.Action -> "self.client.action"
+
+      fullFuncPath = "\"" ++ Action.funcPath func ++ ":" ++ Action.funcName func ++ "\""
+
+      validationBlock =
+        if isModelReturn
+          then "            return " ++ returnHint ++ ".model_validate(raw_result)"
+          else "            return raw_result"
+
+      funcCode =
+        unlines
+          [ "    def " ++ funcNameSnake ++ "(self, " ++ argSignature ++ ") -> " ++ returnHint ++ " | None:",
+            "        \"\"\"Wraps the " ++ fullFuncPath ++ " " ++ show (Action.funcType func) ++ ".\"\"\"",
+            "        payload: dict[str, Any] = {" ++ payloadMapping ++ "}",
+            "        try:",
+            "            raw_result = " ++ handlerCall ++ "(" ++ fullFuncPath ++ ", payload)",
+            "            if raw_result is None:",
+            "                return None",
+            validationBlock,
+            "        except ValidationError as e:",
+            "            print(f\"Validation error in '" ++ funcNameSnake ++ "': {e}\")",
+            "            raise",
+            "        except Exception as e:",
+            "            print(f\"Error in '" ++ funcNameSnake ++ "': {e}\")",
+            "            raise",
+            ""
+          ]
+   in (nested, funcCode)
+
+-- | Generates the `api` class that namespaces all the generated functions.
+generateApiClass :: String -> String
+generateApiClass functionCode =
+  let header =
+        [ "\n# --- API Client Class ---\n",
+          "class API:",
+          "    \"\"\"A type-safe client for your Convex API.\"\"\"",
+          "    def __init__(self, client: ConvexClient):",
+          "        self.client = client",
+          ""
+        ]
+   in unlines (header ++ [functionCode])
+
+-- Helper to generate Python function arguments and the payload dictionary mapping.
+generateArgSignature :: [(String, Schema.ConvexType)] -> (String, String)
+generateArgSignature args =
+  let sigParts = map (\(n, t) -> toSnakeCase n ++ ": " ++ fst4 (toPythonTypeParts n t)) args
+      payloadParts = map (\(n, _) -> "\"" ++ n ++ "\": " ++ toSnakeCase n) args
+   in (intercalate ", " sigParts, intercalate ", " payloadParts)
+  where
+    fst4 (a, _, _, _) = a
+
+-- Helper to get the return type information.
+getReturnType :: String -> Schema.ConvexType -> (String, Bool, [String])
+getReturnType funcName rt =
+  let (pyType, _, _, nested) = toPythonTypeParts (capitalize funcName ++ "Return") rt
+      isModel = case rt of
+        Schema.VObject _ -> True
+        Schema.VArray (Schema.VObject _) -> True
+        Schema.VReference _ -> True
+        _ -> False
+   in (pyType, isModel, nested)
+
+-- Helper to generate a single field line for a Pydantic model.
+generateField :: String -> Schema.Field -> (String, [String])
 generateField parentClassName field =
-  let (pythonType, isOptional, isArray, nestedModels) = toPythonTypeParts (parentClassName ++ capitalize (AST.fieldName field)) (AST.fieldType field)
-      defaultValue = case (isOptional, isArray) of
+  let (pyType, isOpt, isArr, nested) = toPythonTypeParts (parentClassName ++ capitalize (Schema.fieldName field)) (Schema.fieldType field)
+      defaultValue = case (isOpt, isArr) of
         (True, True) -> " = Field(default_factory=list)"
         (True, False) -> " = None"
-        (False, _) -> ""
-      fieldLine = "    " ++ AST.fieldName field ++ ": " ++ pythonType ++ defaultValue
-   in (fieldLine, nestedModels)
+        _ -> ""
+   in ("    " ++ toSnakeCase (Schema.fieldName field) ++ ": " ++ pyType ++ defaultValue, nested)
 
-toPythonTypeParts :: String -> AST.ConvexType -> (String, Bool, Bool, [String])
+-- Core recursive function to generate Python types from the AST.
+toPythonTypeParts :: String -> Schema.ConvexType -> (String, Bool, Bool, [String])
 toPythonTypeParts nameHint typ = case typ of
-  AST.VString -> ("str", False, False, [])
-  AST.VNumber -> ("float", False, False, [])
-  AST.VBoolean -> ("bool", False, False, [])
-  AST.VAny -> ("Any", False, False, [])
-  AST.VNull -> ("None", True, False, [])
-  AST.VId table -> ("Id['" ++ capitalize table ++ "']", False, False, [])
-  AST.VArray inner ->
+  Schema.VString -> ("str", False, False, [])
+  Schema.VNumber -> ("float", False, False, [])
+  Schema.VBoolean -> ("bool", False, False, [])
+  Schema.VAny -> ("Any", False, False, [])
+  Schema.VNull -> ("None", True, False, [])
+  Schema.VId t -> ("Id['" ++ toClassName t ++ "']", False, False, [])
+  Schema.VArray inner ->
     let (innerType, isOpt, isArr, nested) = toPythonTypeParts nameHint inner
      in ("list[" ++ innerType ++ "]", isOpt, isArr, nested)
-  AST.VOptional inner ->
+  Schema.VOptional inner ->
     let (innerType, _, innerIsArray, nested) = toPythonTypeParts nameHint inner
      in (innerType ++ " | None", True, innerIsArray, nested)
-  AST.VUnion types ->
+  Schema.VUnion types ->
     let results = map (toPythonTypeParts nameHint) types
         pyTypes = map (\(t, _, _, _) -> t) results
         nested = concatMap (\(_, _, _, n) -> n) results
      in (intercalate " | " pyTypes, False, False, nested)
-  AST.VLiteral s -> ("Literal['" ++ s ++ "']", False, False, [])
-  AST.VReference name -> (name, False, False, [])
-  AST.VObject fields ->
-    let className = nameHint ++ "Object"
-        (fieldLines, nestedFromFields) = unzip $ map (generateField className . tupleToField) fields
-        newModelCode =
-          unlines
-            [ "class " ++ className ++ "(BaseModel):",
-              "    \"\"\"Nested object structure.\"\"\"",
-              unlines fieldLines
-            ]
-     in (className, False, False, newModelCode : concat nestedFromFields)
+  Schema.VLiteral s -> ("Literal[\"" ++ s ++ "\"]", False, False, [])
+  Schema.VReference n -> (n, False, False, [])
+  Schema.VObject fields ->
+    let className = capitalize nameHint ++ "Object"
+        (fieldLines, nested) = unzip $ map (generateField className) (map (\(n, t) -> Schema.Field n t) fields)
+        newModel = unlines $ ["class " ++ className ++ "(BaseModel):"] ++ fieldLines
+     in (className, False, False, newModel : concat nested)
+  Schema.VVoid -> ("None", True, False, [])
 
-tupleToField :: (String, AST.ConvexType) -> AST.Field
-tupleToField (name, typ) =
-  AST.Field
-    { AST.fieldName = name,
-      AST.fieldType = typ
-    }
+capitalize :: String -> String
+capitalize "" = ""
+capitalize (c : cs) = toUpper c : cs
+
+toSingular :: String -> String
+toSingular s
+  | last s == 's' = capitalize (init s)
+  | otherwise = capitalize s
+
+toClassName :: String -> String
+toClassName s = capitalize s ++ "Doc"
+
+toSnakeCase :: String -> String
+toSnakeCase "" = ""
+toSnakeCase (c : cs) = toLower c : go cs
+  where
+    go (c' : cs')
+      | isUpper c' = '_' : toLower c' : go cs'
+      | otherwise = c' : go cs'
+    go "" = ""

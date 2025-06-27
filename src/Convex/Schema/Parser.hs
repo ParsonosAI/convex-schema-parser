@@ -9,6 +9,18 @@ module Convex.Schema.Parser
     Index (..),
     Field (..),
     ConvexType (..),
+    ParserState (..),
+    lexeme,
+    whiteSpace,
+    langDef,
+    identifier,
+    stringLiteral,
+    reserved,
+    parens,
+    braces,
+    lexer,
+    convexTypeParser,
+    initialState,
   )
 where
 
@@ -71,6 +83,7 @@ data ConvexType
   | VUnion [ConvexType] -- e.g., v.union(v.literal("a"), v.literal("b"))
   | VLiteral String -- e.g., v.literal("read")
   | VReference String -- e.g., a reference to `roleEnum`
+  | VVoid -- Represents a type that doesn't have a specific Convex type, used for ignored statements
   deriving (Show, Eq, Ord)
 
 langDef :: Token.GenLanguageDef String ParserState IO
@@ -135,7 +148,7 @@ fieldParser :: SchemaParser Field
 fieldParser = lexeme $ do
   key <- identifier <|> stringLiteral
   void $ lexeme $ char ':'
-  value <- convexTypeParser -- This now handles all possible types
+  value <- convexTypeParser
   return $ Field key value
 
 indexParser :: SchemaParser Index
@@ -181,7 +194,6 @@ convexTypeParser =
         "id" -> VId <$> parens stringLiteral
         "array" -> VArray <$> (single (parens (single convexTypeParser)))
         "object" -> (VObject . map fieldToTuple) <$> parens (braces (sepEndBy fieldParser (lexeme $ char ',')))
-        -- NEW Cases
         "optional" -> VOptional <$> parens convexTypeParser
         "union" -> VUnion <$> parens (sepEndBy convexTypeParser (lexeme $ char ','))
         "literal" -> VLiteral <$> parens stringLiteral
@@ -198,7 +210,6 @@ topLevelConstParser = lexeme $ do
   void $ lexeme $ char '='
   constType <- convexTypeParser
   void $ lexeme $ char ';' <|> (lookAhead (char '\n')) -- End with semicolon or newline
-  -- Modify the state by inserting the new constant
   modifyState (\s -> s {psConstants = Map.insert constName constType (psConstants s)})
 
 ignoredStatementParser :: SchemaParser ()
@@ -248,14 +259,11 @@ fileParser = do
   reserved "defineSchema"
   tables <- parens $ braces $ sepEndBy tableParser (lexeme $ char ',')
 
-  -- After everything is parsed, get the final state.
   finalState <- getState
   return $ ParsedFile (psConstants finalState) (Schema tables)
 
 parseSchema :: String -> IO (Either ParseError ParsedFile)
 parseSchema input = do
-  -- `runParserT` takes the parser, state, filename, and input.
-  -- It returns the result and the final state.
   result <- runParserT fileParser initialState "(schema.ts)" input
   case result of
     Left err -> return $ Left err

@@ -13,11 +13,14 @@ common warnings
 library convex-schema-parser-lib
     import:           warnings
     exposed-modules:  Convex.Schema.Parser
+        , Convex.Action.Parser
+        , Convex.Parser
         , Backend.Python
     build-depends:    base
         , parsec
         , mtl
         , containers
+        , filepath
     hs-source-dirs:   src
     default-language: Haskell2010
 
@@ -28,3 +31,17 @@ executable convex-schema-parser
                       parsec
     hs-source-dirs:   app
     default-language: Haskell2010
+
+test-suite test-convex-parser
+    type:                exitcode-stdio-1.0
+    main-is:             Main.hs
+    other-modules:       ActionParserTest
+        , ApiParserTest
+    hs-source-dirs:      test
+    build-depends:       base,
+                         HUnit,
+                         parsec,
+                         mtl,
+                         containers,
+                         convex-schema-parser-lib
+    default-language:    Haskell2010
