@@ -109,20 +109,12 @@ unifyProjectTypes project =
   let unionMap = buildUnionSignatureMap (ppConstants project)
    in project {ppFunctions = map (unifyFunctionTypes unionMap) (ppFunctions project)}
   where
-    getLiteralString :: Schema.ConvexType -> String
-    getLiteralString (Schema.VLiteral str) = str
-    getLiteralString _ = error "Expected a literal type"
-
-    isLiteral :: Schema.ConvexType -> Bool
-    isLiteral (Schema.VLiteral _) = True
-    isLiteral _ = False
-
     buildUnionSignatureMap :: Map.Map String Schema.ConvexType -> UnionSignatureMap
     buildUnionSignatureMap constants =
       Map.fromList
-        [ (sort $ map getLiteralString literals, name)
+        [ (sort $ map Schema.getLiteralString literals, name)
         | (name, Schema.VUnion literals) <- Map.toList constants,
-          all isLiteral literals
+          all Schema.isLiteral literals
         ]
 
     unifyFunctionTypes :: UnionSignatureMap -> Action.ConvexFunction -> Action.ConvexFunction
@@ -139,8 +131,8 @@ unifyProjectTypes project =
     -- This new recursive function traverses the entire type structure.
     unifyTypeRecursively :: UnionSignatureMap -> Schema.ConvexType -> Schema.ConvexType
     unifyTypeRecursively unionMap u@(Schema.VUnion literals)
-      | all isLiteral literals =
-          let signature = sort $ map getLiteralString literals
+      | all Schema.isLiteral literals =
+          let signature = sort $ map Schema.getLiteralString literals
            in case Map.lookup signature unionMap of
                 Just refName -> Schema.VReference refName
                 Nothing -> u

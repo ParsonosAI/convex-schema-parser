@@ -21,6 +21,8 @@ module Convex.Schema.Parser
     lexer,
     convexTypeParser,
     initialState,
+    getLiteralString,
+    isLiteral,
   )
 where
 
@@ -85,6 +87,14 @@ data ConvexType
   | VReference String -- e.g., a reference to `roleEnum`
   | VVoid -- Represents a type that doesn't have a specific Convex type, used for ignored statements
   deriving (Show, Eq, Ord)
+
+getLiteralString :: ConvexType -> String
+getLiteralString (VLiteral str) = str
+getLiteralString _ = error "Expected a literal type"
+
+isLiteral :: ConvexType -> Bool
+isLiteral (VLiteral _) = True
+isLiteral _ = False
 
 langDef :: Token.GenLanguageDef String ParserState IO
 langDef =

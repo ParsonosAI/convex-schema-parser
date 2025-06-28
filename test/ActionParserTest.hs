@@ -13,7 +13,11 @@ tests =
     ~: test
       [ runActionTest "parses createProject mutation" "test/api" sampleCreateProject expectedCreateProject,
         runActionTest "ignores internal actions" "test/api" sampleInternalAction [],
-        runActionTest "parses public query with complex return" "functions/users" samplePublicGetOrgs expectedPublicGetOrgs
+        runActionTest "parses public query with complex return" "functions/users" samplePublicGetOrgs expectedPublicGetOrgs,
+        runActionTest "parses public action with optional args" "functions/stripe" samplePublicAction expectedPublicAction,
+        runActionTest "parses internal action with external type as VAny" "functions/stripe" sampleStripeSubscriptionAction expectedStripeSubscriptionAction,
+        runActionTest "parses public action with external type" "functions/stripe" sampleStripeCheckoutAction sampleStripeCheckoutActionExpected,
+        runActionTest "parses public action with external type as VAny" "functions/stripe" sampleStripeSubscriptionActionPublic expectedStripeSubscriptionActionPublic
       ]
   where
     runActionTest testName path input expected =
@@ -88,5 +92,81 @@ expectedPublicGetOrgs =
                   )
                 ]
             )
+      }
+  ]
+
+samplePublicAction :: String
+samplePublicAction =
+  unlines
+    [ "export declare const createCheckoutSession: import(\"convex/server\").RegisteredAction<\"public\", {",
+      "    next_url?: string;",
+      "    tenant_id: import(\"convex/values\").GenericId<\"tenants\">;",
+      "    price_id: string;",
+      "}, Promise<string>>;"
+    ]
+
+expectedPublicAction :: [Action.ConvexFunction]
+expectedPublicAction =
+  [ Action.ConvexFunction
+      { Action.funcName = "createCheckoutSession",
+        Action.funcPath = "functions/stripe",
+        Action.funcType = Action.Action,
+        Action.funcArgs =
+          [ ("next_url", Schema.VOptional Schema.VString),
+            ("tenant_id", Schema.VId "tenants"),
+            ("price_id", Schema.VString)
+          ],
+        Action.funcReturn = Schema.VString
+      }
+  ]
+
+sampleStripeSubscriptionAction :: String
+sampleStripeSubscriptionAction = "export declare const stripeSubscription: import(\"convex/server\").RegisteredAction<\"internal\", { subscription_id: string; }, Promise<Stripe.Subscription>>;"
+
+expectedStripeSubscriptionAction :: [Action.ConvexFunction]
+expectedStripeSubscriptionAction = []
+
+sampleStripeSubscriptionActionPublic :: String
+sampleStripeSubscriptionActionPublic =
+  unlines
+    [ "export declare const stripeSubscription: import(\"convex/server\").RegisteredAction<\"public\", {",
+      "    subscription_id: string;",
+      "}, Promise<Stripe.Subscription>>;"
+    ]
+
+-- Even though the return type is an external type, it should still parse correctly.
+expectedStripeSubscriptionActionPublic :: [Action.ConvexFunction]
+expectedStripeSubscriptionActionPublic =
+  [ Action.ConvexFunction
+      { Action.funcName = "stripeSubscription",
+        Action.funcPath = "functions/stripe",
+        Action.funcType = Action.Action,
+        Action.funcArgs = [("subscription_id", Schema.VString)],
+        Action.funcReturn = Schema.VAny -- External type, parsed as VAny
+      }
+  ]
+
+sampleStripeCheckoutAction :: String
+sampleStripeCheckoutAction =
+  unlines
+    [ "export declare const createCheckoutSession: import(\"convex/server\").RegisteredAction<\"public\", {",
+      "    next_url?: string;",
+      "    tenant_id: import(\"convex/values\").GenericId<\"tenants\">;",
+      "    price_id: string;",
+      "}, Promise<string>>;"
+    ]
+
+sampleStripeCheckoutActionExpected :: [Action.ConvexFunction]
+sampleStripeCheckoutActionExpected =
+  [ Action.ConvexFunction
+      { Action.funcName = "createCheckoutSession",
+        Action.funcPath = "functions/stripe",
+        Action.funcType = Action.Action,
+        Action.funcArgs =
+          [ ("next_url", Schema.VOptional Schema.VString),
+            ("tenant_id", Schema.VId "tenants"),
+            ("price_id", Schema.VString)
+          ],
+        Action.funcReturn = Schema.VString
       }
   ]

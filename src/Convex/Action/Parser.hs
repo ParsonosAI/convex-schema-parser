@@ -10,6 +10,7 @@ module Convex.Action.Parser
 where
 
 import Control.Monad (void)
+import Control.Monad.IO.Class (MonadIO (..))
 import Convex.Schema.Parser (parens)
 import qualified Convex.Schema.Parser as Schema
 import Data.Functor (($>))
@@ -98,6 +99,17 @@ dtsTypeParser = do
   -- Wrap the base type in VArray for each `[]` found
   return $ foldr (\_ acc -> Schema.VArray acc) baseType (replicate arrayCount ())
   where
+    -- Parses both single identifiers (like `RoleEnum`)
+    -- and qualified identifiers (like `Stripe.Subscription`).
+    qualifiedIdentifierParser :: SchemaParser Schema.ConvexType
+    qualifiedIdentifierParser = do
+      parts <- sepBy1 identifier (lexeme (char '.'))
+      if length parts > 1
+        then -- If there's a dot, it's definitely an external type.
+          return Schema.VAny
+        else -- Otherwise, it's a single-word identifier, treat as a reference.
+          return (Schema.VReference (head parts))
+
     singleType =
       (Schema.VString <$ try (reserved "string"))
         <|> (Schema.VNumber <$ try (reserved "number"))
@@ -107,7 +119,8 @@ dtsTypeParser = do
         <|> (Schema.VId <$> try genericIdParser)
         <|> (Schema.VObject <$> try (braces (sepEndBy dtsFieldParser (lexeme (char ';')))))
         <|> try (parens dtsTypeParser)
-        <|> (Schema.VReference <$> identifier)
+        -- This is now the last option, which correctly handles all remaining identifiers.
+        <|> qualifiedIdentifierParser
 
 -- A parser for a single field inside an argument or object type
 dtsFieldParser :: SchemaParser (String, Schema.ConvexType)
@@ -191,5 +204,36 @@ mapMaybe f (x : xs) =
     Just v -> v : mapMaybe f xs
     Nothing -> mapMaybe f xs
 
+-- | A helper to parse and ignore statements that we don't care about.
+ignoredStatementParser :: SchemaParser ()
+ignoredStatementParser =
+  choice . map try $
+    [ importStatement,
+      lineComment,
+      blockComment,
+      void (skipMany1 (oneOf " \t\n\r"))
+    ]
+  where
+    importStatement =
+      reserved "import"
+        *> manyTill anyChar (char ';')
+        *> pure ()
+    lineComment =
+      string (Token.commentLine langDef) *> manyTill anyChar (try (lookAhead (char '\n'))) *> pure ()
+    blockComment =
+      string (Token.commentStart langDef)
+        *> manyTill anyChar (try (string (Token.commentEnd langDef)))
+        *> pure ()
+
 parseActionFile :: String -> SchemaParser [ConvexFunction]
-parseActionFile path = whiteSpace *> (mapMaybe id <$> many (try (registeredFunctionParser path)))
+parseActionFile path = do
+  whiteSpace
+  -- FIX: In a loop, consume either a function or an ignored statement,
+  -- effectively skipping over comments and imports between functions.
+  results <-
+    many
+      ( (try (Right <$> registeredFunctionParser path))
+          <|> (try (Left <$> ignoredStatementParser))
+      )
+  -- Filter out the ignored statements (Lefts) and keep only the functions (Rights).
+  return $ mapMaybe (either (const Nothing) id) results
