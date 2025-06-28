@@ -22,6 +22,7 @@ generateRustCode project =
       "// serde = { version = \"1.0\", features = [\"derive\"] }",
       "// serde_json = \"1.0\"",
       "// thiserror = \"1.0\"",
+      "// anyhow = \"1.0\"",
       "",
       generateRustModuleContent project
     ]
@@ -131,22 +132,23 @@ generateAllFunctions funcs =
 -- | Generates a single async Rust function for a Convex function.
 generateFunction :: Action.ConvexFunction -> ([String], String)
 generateFunction func =
-  let (argSignature, nestedFromArgs) = generateArgSignature (Action.funcArgs func)
-      funcNameSnake = toSnakeCase (Action.funcName func)
-      (returnHint, isNullable, nestedFromReturn) = getReturnType (Action.funcName func) (Action.funcReturn func)
+  let funcName = Action.funcName func
+      (argSignature, nestedFromArgs) = generateArgSignature funcName (Action.funcArgs func)
+      funcNameSnake = toSnakeCase funcName
+      (returnHint, isNullable, nestedFromReturn) = getReturnType funcName (Action.funcReturn func)
       handlerCall = case Action.funcType func of
         Action.Query -> "query"
         Action.Mutation -> "mutation"
         Action.Action -> "action"
-      fullFuncPath = Action.funcPath func ++ ":" ++ Action.funcName func
+      fullFuncPath = Action.funcPath func ++ ":" ++ funcName
       btreemapConstruction = generateBTreeMap (Action.funcArgs func)
       returnHandling = generateReturnHandling returnHint isNullable
       funcCode =
         unlines
           [ "    /// Wraps the `" ++ fullFuncPath ++ "` " ++ show (Action.funcType func) ++ ".",
             "    pub async fn " ++ funcNameSnake ++ "(&mut self, " ++ argSignature ++ ") -> Result<" ++ returnHint ++ ", ApiError> {",
-            "        " ++ btreemapConstruction,
-            "        let result_value = self.client." ++ handlerCall ++ "(\"" ++ fullFuncPath ++ "\", args).await?;",
+            btreemapConstruction,
+            "        let result = self.client." ++ handlerCall ++ "(\"" ++ fullFuncPath ++ "\".to_string(), args).await?;",
             "        " ++ returnHandling,
             "    }"
           ]
@@ -221,9 +223,9 @@ generateField field =
    in (fieldLine, nested)
 
 -- | Helper to generate the function signature's arguments.
-generateArgSignature :: [(String, Schema.ConvexType)] -> (String, [String])
-generateArgSignature args =
-  let results = map (\(n, t) -> toRustType n t) args
+generateArgSignature :: String -> [(String, Schema.ConvexType)] -> (String, [String])
+generateArgSignature funcName args =
+  let results = map (\(n, t) -> toRustType (funcName ++ capitalize n) t) args
       sigParts = zipWith (\(n, _) (ty, _) -> toSnakeCase n ++ ": " ++ toRustBorrowType ty) args results
       nestedModels = concatMap snd results
    in (intercalate ", " sigParts, nestedModels)
@@ -278,7 +280,7 @@ toRustValueConversion varName _ = "Value::from(" ++ varName ++ ".clone())"
 -- | Helper to get the return type information.
 getReturnType :: String -> Schema.ConvexType -> (String, Bool, [String])
 getReturnType funcName rt =
-  let (baseType, nested) = toRustType funcName rt
+  let (baseType, nested) = toRustType (funcName ++ "Return") rt
       isNullable = needsOptionalWrapper rt
    in if baseType == "()"
         then ("()", False, nested)
@@ -373,8 +375,10 @@ toPascalCase :: String -> String
 toPascalCase s = concatMap capitalize parts
   where
     parts = words $ map (\c -> if c == '_' then ' ' else c) s
-    capitalize "" = ""
-    capitalize (c : cs) = toUpper c : cs
+
+capitalize :: String -> String
+capitalize "" = ""
+capitalize (c : cs) = toUpper c : cs
 
 -- | Converts a string to snake_case.
 toSnakeCase :: String -> String
