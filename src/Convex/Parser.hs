@@ -5,6 +5,7 @@ module Convex.Parser (parseProject, ParsedProject (..), apiFileParser) where
 import Control.Monad (forM, void)
 import qualified Convex.Action.Parser as Action
 import qualified Convex.Schema.Parser as Schema
+import Data.List (sort)
 import qualified Data.Map as Map
 import System.FilePath (replaceExtension, (</>))
 import Text.Parsec
@@ -97,4 +98,57 @@ parseProject schemaPath declRootDir = do
                 ppFunctions = allFunctions
               }
 
-      return $ Right project
+      return $ Right . unifyProjectTypes $ project
+
+type UnionSignatureMap = Map.Map [String] String
+
+-- | Pre-processes the parsed project to replace anonymous unions with named references
+-- if they structurally match.
+unifyProjectTypes :: ParsedProject -> ParsedProject
+unifyProjectTypes project =
+  let unionMap = buildUnionSignatureMap (ppConstants project)
+   in project {ppFunctions = map (unifyFunctionTypes unionMap) (ppFunctions project)}
+  where
+    getLiteralString :: Schema.ConvexType -> String
+    getLiteralString (Schema.VLiteral str) = str
+    getLiteralString _ = error "Expected a literal type"
+
+    isLiteral :: Schema.ConvexType -> Bool
+    isLiteral (Schema.VLiteral _) = True
+    isLiteral _ = False
+
+    buildUnionSignatureMap :: Map.Map String Schema.ConvexType -> UnionSignatureMap
+    buildUnionSignatureMap constants =
+      Map.fromList
+        [ (sort $ map getLiteralString literals, name)
+        | (name, Schema.VUnion literals) <- Map.toList constants,
+          all isLiteral literals
+        ]
+
+    unifyFunctionTypes :: UnionSignatureMap -> Action.ConvexFunction -> Action.ConvexFunction
+    unifyFunctionTypes unionMap func =
+      func
+        { Action.funcArgs = map (unifyArgType unionMap) (Action.funcArgs func),
+          Action.funcReturn = unifyTypeRecursively unionMap (Action.funcReturn func)
+        }
+
+    unifyArgType :: UnionSignatureMap -> (String, Schema.ConvexType) -> (String, Schema.ConvexType)
+    unifyArgType unionMap (argName, argType) =
+      (argName, unifyTypeRecursively unionMap argType)
+
+    -- This new recursive function traverses the entire type structure.
+    unifyTypeRecursively :: UnionSignatureMap -> Schema.ConvexType -> Schema.ConvexType
+    unifyTypeRecursively unionMap u@(Schema.VUnion literals)
+      | all isLiteral literals =
+          let signature = sort $ map getLiteralString literals
+           in case Map.lookup signature unionMap of
+                Just refName -> Schema.VReference refName
+                Nothing -> u
+      | otherwise = u
+    unifyTypeRecursively unionMap (Schema.VObject fields) =
+      Schema.VObject $ map (\(name, t) -> (name, unifyTypeRecursively unionMap t)) fields
+    unifyTypeRecursively unionMap (Schema.VArray inner) =
+      Schema.VArray $ unifyTypeRecursively unionMap inner
+    unifyTypeRecursively unionMap (Schema.VOptional inner) =
+      Schema.VOptional $ unifyTypeRecursively unionMap inner
+    unifyTypeRecursively _ otherType = otherType -- Base cases

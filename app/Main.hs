@@ -1,6 +1,7 @@
 module Main (main) where
 
 import qualified Backend.Python as Python
+import qualified Backend.Rust as Rust
 import qualified Convex.Parser as P
 import Data.List (intercalate)
 import Options.Applicative
@@ -68,8 +69,11 @@ main = do
           case outputFile opts of
             Just path -> writeFile path pythonCode
             Nothing -> putStrLn pythonCode
-        Rust ->
-          putStrLn "Rust backend not yet implemented."
+        Rust -> do
+          let rustCode = Rust.generateRustCode project
+           in case outputFile opts of
+                Just path -> writeFile path rustCode
+                Nothing -> putStrLn rustCode
   where
     optsParserInfo =
       info

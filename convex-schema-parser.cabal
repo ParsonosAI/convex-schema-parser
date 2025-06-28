@@ -16,6 +16,7 @@ library convex-schema-parser-lib
         , Convex.Action.Parser
         , Convex.Parser
         , Backend.Python
+        , Backend.Rust
     build-depends:    base
         , parsec
         , mtl
