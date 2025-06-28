@@ -106,6 +106,7 @@ dtsTypeParser = do
         <|> (Schema.VLiteral <$> try stringLiteral)
         <|> (Schema.VId <$> try genericIdParser)
         <|> (Schema.VObject <$> try (braces (sepEndBy dtsFieldParser (lexeme (char ';')))))
+        <|> try (parens dtsTypeParser)
         <|> (Schema.VReference <$> identifier)
 
 -- A parser for a single field inside an argument or object type
@@ -169,7 +170,7 @@ registeredFunctionParser fPath = lexeme $ do
     vis <- stringLiteral
     void $ lexeme $ char ','
     args <-
-      (braces (sepEndBy dtsFieldParser (lexeme (char ';'))))
+      (try (braces (sepEndBy dtsFieldParser (lexeme (char ';')))))
         <|> (try defaultFuncArgsParser $> [])
     void $ lexeme $ char ','
     void $ reserved "Promise"
@@ -178,9 +179,10 @@ registeredFunctionParser fPath = lexeme $ do
 
   void $ lexeme $ char ';'
 
-  if visibility == "internal"
-    then return Nothing
-    else return $ Just (ConvexFunction fName fPath fType fArgs fReturn)
+  case visibility of
+    "public" -> return $ Just (ConvexFunction fName fPath fType fArgs fReturn)
+    "internal" -> return Nothing
+    other -> fail $ "Unknown or unhandled visibility in d.ts file: \"" ++ other ++ "\""
 
 mapMaybe :: (a -> Maybe b) -> [a] -> [b]
 mapMaybe _ [] = []
