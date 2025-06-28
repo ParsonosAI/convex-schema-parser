@@ -27,10 +27,19 @@ library convex-schema-parser-lib
 
 executable convex-schema-parser
     main-is:          Main.hs
+    other-modules:    Dev
+        , Config
     build-depends:    base,
                       convex-schema-parser-lib,
                       parsec,
-                      optparse-applicative
+                      optparse-applicative,
+                      fsnotify,
+                      process,
+                      directory,
+                      yaml,
+                      aeson,
+                      stm,
+                      deepseq
     hs-source-dirs:   app
     default-language: Haskell2010
 
