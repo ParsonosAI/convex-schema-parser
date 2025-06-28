@@ -3,3 +3,4 @@ schema.ts
 schema.py
 convex.py
 convex.rs
+convex-parser.yaml
