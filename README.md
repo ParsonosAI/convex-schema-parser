@@ -148,6 +148,8 @@ Once you have generated your client code, you can use it in your projects.
 
 The generated Python client uses nested classes to mirror your Convex project's file structure.
 
+### Queries, Mutations and Actions
+
 ```python
 import os
 from convex import ConvexClient
@@ -181,9 +183,41 @@ except Exception as e:
     print(f"An error occurred: {e}")
 ```
 
+### Subscriptions
+
+```python
+from convex import ConvexError
+
+# ... (assuming `api` is already instantiated and authenticated)
+
+try:
+    # 1. Call the generated `subscribe_*` method. This returns a generator instantly.
+    tenant_id = convex_api.Id("tnt_...")
+    project_subscription = api.functions.queries.subscribe_fetch_projects(tenant_id)
+
+    print("Subscribed to projects. Waiting for updates... (Press Ctrl+C to stop)")
+
+    # 2. The `for` loop starts the subscription and blocks until the first value
+    #    is received. The loop body will run again for each subsequent update.
+    for updated_projects in project_subscription:
+        # 3. `updated_projects` is already a fully validated Pydantic model
+        #    (e.g., list[FetchProjectsReturnObject]).
+        print(f"Received update with {len(updated_projects)} projects:")
+        for project in updated_projects:
+            print(f"  - ID: {project._id}, Name: {project.project_name}")
+
+except ConvexError as e:
+    print(f"Subscription failed with an error: {e}")
+except KeyboardInterrupt:
+    print("\nSubscription stopped by user.")
+```
+
+
 ## Rust Client Example
 
 The generated Rust client uses a method-based API which works with Rust's ownership and borrowing rules.
+
+### Queries, Mutations and Actions
 
 ```rust
 // Assuming the generated module is named `convex_api`.
@@ -216,6 +250,41 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(e) => {
             eprintln!("An error occurred: {}", e);
+        }
+    }
+
+    Ok(())
+}
+```
+
+### Subscriptions
+
+```rust
+use futures_util::stream::StreamExt;
+
+// ... (assuming `api` is already instantiated and authenticated)
+
+async fn run_subscription() -> anyhow::Result<()> {
+    // 1. Call the generated `subscribe_*` method.
+    let tenant_id = convex_api::Id::<convex_api::types::TenantsDoc>::new("tnt_...".to_string());
+    let mut project_subscription = api.functions().queries().subscribe_fetch_projects(&tenant_id).await?;
+
+    println!("Subscribed to projects. Waiting for updates... (Press Ctrl+C to stop)");
+
+    // 2. The `while let` loop asynchronously polls the stream for new items.
+    while let Some(result) = project_subscription.next().await {
+        // 3. Each `result` is a `Result<T, ApiError>`, where T is the strongly-typed
+        //    return value (e.g., Vec<FetchProjectsReturnObject>).
+        match result {
+            Ok(updated_projects) => {
+                println!("Received update with {} projects:", updated_projects.len());
+                for project in updated_projects {
+                    println!("  - ID: {}, Name: {}", project._id, project.project_name.unwrap_or_default());
+                }
+            }
+            Err(e) => {
+                eprintln!("Received an error in the subscription stream: {}", e);
+            }
         }
     }
 
