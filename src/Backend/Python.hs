@@ -35,9 +35,9 @@ generateHeader :: String
 generateHeader =
   unlines
     [ "from pydantic import BaseModel, Field, ValidationError, TypeAdapter",
-      "from typing import Any, Generic, TypeVar, Literal",
+      "from typing import Any, Generic, TypeVar, Literal, Iterator",
       "from pydantic_core import core_schema",
-      "from convex import ConvexClient",
+      "from convex import ConvexClient, ConvexError",
       "",
       "",
       "T = TypeVar('T')",
@@ -100,8 +100,6 @@ generateFunction level func =
         Action.Mutation -> "self._client.mutation"
         Action.Action -> "self._client.action"
 
-      -- The function path in the generated code should be relative to its direct parent class.
-      -- The full path is only used for display.
       fullFuncPath = "\"" ++ Action.funcPath func ++ ":" ++ funcName ++ "\""
 
       (finalReturnHint, tryBlock) = case Action.funcReturn func of
@@ -150,11 +148,38 @@ generateFunction level func =
           ]
    in (funcCode, nestedFromArgs ++ nestedFromReturn)
 
--- | A tree structure representing the nested API, where each node is either
--- a directory (leading to more nodes) or a function.
+generateSubscriptionFunction :: Int -> Action.ConvexFunction -> (String, [String])
+generateSubscriptionFunction level func =
+  let funcName = Action.funcName func
+      (argSignature, payloadMapping, nestedFromArgs) = generateArgSignature funcName (Action.funcArgs func)
+      funcNameSnake = "subscribe_" ++ toSnakeCase funcName
+      (returnHint, _, nestedFromReturn) = getReturnType funcName (Action.funcReturn func)
+      finalReturnHint = "Iterator[" ++ returnHint ++ "]"
+      fullFuncPath = "\"" ++ Action.funcPath func ++ ":" ++ funcName ++ "\""
+
+      -- We create a TypeAdapter for ALL subscription functions, this also handles primitive types.
+      adapterCreation = indent (level + 1) ("adapter = TypeAdapter(" ++ returnHint ++ ")")
+      validationLogic = indent (level + 3) "validated_result = adapter.validate_python(raw_result)"
+
+      funcCode =
+        unlines
+          [ indent level ("def " ++ funcNameSnake ++ "(self, " ++ argSignature ++ ") -> " ++ finalReturnHint ++ ":"),
+            indent (level + 1) ("\"\"\"Subscribes to the " ++ fullFuncPath ++ " query.\"\"\""),
+            indent (level + 1) ("payload: dict[str, Any] = {" ++ payloadMapping ++ "}"),
+            indent (level + 1) ("raw_subscription = self._client.subscribe(" ++ fullFuncPath ++ ", payload)"),
+            adapterCreation,
+            indent (level + 1) "for raw_result in raw_subscription:",
+            indent (level + 2) "try:",
+            validationLogic,
+            indent (level + 3) "yield validated_result",
+            indent (level + 2) "except ValidationError as e:",
+            indent (level + 3) "print(f\"Validation error in subscription update: {e}\")",
+            indent (level + 3) "continue"
+          ]
+   in (funcCode, nestedFromArgs ++ nestedFromReturn)
+
 data PathTree = FuncNode Action.ConvexFunction | DirNode (Map.Map String PathTree)
 
--- | Builds the PathTree from a flat list of Convex functions.
 buildPathTree :: [Action.ConvexFunction] -> PathTree
 buildPathTree = foldl (flip insertFunc) (DirNode Map.empty)
   where
@@ -171,7 +196,6 @@ buildPathTree = foldl (flip insertFunc) (DirNode Map.empty)
             FuncNode _ -> error $ "Path conflict: cannot create submodule in path containing function: " ++ p
        in Map.insert p newSubTree dir
 
--- | Recursively generates the Python code (init lines and definitions) for the nested API structure.
 generateApiStructure :: Int -> PathTree -> ([String], [String], [String])
 generateApiStructure level (DirNode dir) =
   let (inits, defs, nested) = foldl processEntry ([], [], []) (Map.toList dir)
@@ -179,7 +203,11 @@ generateApiStructure level (DirNode dir) =
   where
     processEntry (is, ds, ns) (_name, FuncNode func) =
       let (funcDef, nestedFromFunc) = generateFunction level func
-       in (is, ds ++ [funcDef], ns ++ nestedFromFunc)
+          (subDef, nestedFromSub) =
+            if Action.funcType func == Action.Query
+              then generateSubscriptionFunction level func
+              else ("", [])
+       in (is, ds ++ [funcDef, subDef], ns ++ nestedFromFunc ++ nestedFromSub)
     processEntry (is, ds, ns) (name, DirNode subDir) =
       let className = capitalize name
           attrName = toSnakeCase name
@@ -190,16 +218,13 @@ generateApiStructure level (DirNode dir) =
               [ "",
                 indent level ("class " ++ className ++ ":"),
                 indent (level + 1) "def __init__(self, client: ConvexClient):",
-                indent (level + 2) "self._client = client",
-                "",
-                ""
+                indent (level + 2) "self._client = client"
               ]
                 ++ map (indent (level + 2)) subInits
                 ++ subDefs
        in (is ++ [initLine], ds ++ [classDef], ns ++ nestedFromSub)
 generateApiStructure _ (FuncNode _) = ([], [], [])
 
--- | The main entry point for generating the entire API class structure.
 generateApiClass :: [Action.ConvexFunction] -> (String, [String])
 generateApiClass funcs =
   let tree = buildPathTree funcs
@@ -211,7 +236,6 @@ generateApiClass funcs =
           indent 1 "def __init__(self, client: ConvexClient):",
           indent 2 "self._client = client"
         ]
-      -- The body is now correctly ordered: init lines first, then all definitions.
       body = map (indent 2) initLines ++ definitionLines
    in (unlines (header ++ body), nub nestedModels)
 
