@@ -7,19 +7,20 @@ import qualified Convex.Parser as P
 import qualified Convex.Schema.Parser as Schema
 import Data.Char (isUpper, toLower, toUpper)
 import Data.List (intercalate, isPrefixOf, nub)
+import Data.List.Split (splitOn)
 import qualified Data.Map as Map
 
+-- Helper function to prepend a given number of spaces (4 per level).
 indent :: Int -> String -> String
 indent n s = replicate (n * 4) ' ' ++ s
 
 generatePythonCode :: P.ParsedProject -> String
 generatePythonCode project =
-  let (nestedModelsFromFunctions, functionCode) = generateAllFunctions (P.ppFunctions project)
-      (constantsCode, nestedModelsFromConstants) = generateAllConstants (P.ppConstants project)
-      (schemaCode, nestedModelsFromSchema) = generateAllTables (P.ppSchema project)
-      allNestedCode = unlines . nub $ nestedModelsFromSchema ++ nestedModelsFromFunctions ++ nestedModelsFromConstants
+  let (constantsCode, nestedModelsFromConstants) = generateAllConstants (P.ppConstants project)
+      (schemaCode, nestedFromFields) = generateAllTables (P.ppSchema project)
+      (apiClassCode, nestedFromFuncs) = generateApiClass (P.ppFunctions project)
+      allNestedCode = unlines . nub $ nestedFromFields ++ nestedModelsFromConstants ++ nestedFromFuncs
       aliasesCode = generateAliases (P.ppSchema project)
-      apiClassCode = generateApiClass functionCode
    in unlines
         [ generateHeader,
           constantsCode,
@@ -61,14 +62,14 @@ generateAllConstants constants =
 -- | Generates Pydantic BaseModel classes for all tables.
 generateAllTables :: Schema.Schema -> (String, [String])
 generateAllTables (Schema.Schema tables) =
-  let results = map generateTable tables
-   in (unlines $ map fst results, concatMap snd results)
+  let (tableCodes, nested) = unzip $ map generateTable tables
+   in (unlines tableCodes, concat nested)
 
 -- | Generates a single Pydantic BaseModel class for a table.
 generateTable :: Schema.Table -> (String, [String])
 generateTable table =
   let className = toClassName (Schema.tableName table)
-      (fieldLines, nestedModels) = unzip $ map (generateField className) (Schema.tableFields table)
+      (fieldLines, nestedModelsFromFields) = unzip $ map (generateField className) (Schema.tableFields table)
       tableCode =
         unlines
           [ "class " ++ className ++ "(BaseModel):",
@@ -76,7 +77,7 @@ generateTable table =
             indent 1 "_creationTime: float",
             unlines fieldLines
           ]
-   in (tableCode, concat nestedModels)
+   in (tableCode, concat nestedModelsFromFields)
 
 -- | Generates singular type aliases for all table documents.
 generateAliases :: Schema.Schema -> String
@@ -86,37 +87,37 @@ generateAliases (Schema.Schema tables) =
   where
     toAlias t = toSingular (Schema.tableName t) ++ " = " ++ toClassName (Schema.tableName t)
 
--- | Generates a typed Python function for each Convex function.
-generateAllFunctions :: [Action.ConvexFunction] -> ([String], String)
-generateAllFunctions funcs =
-  let results = map generateFunction funcs
-   in (concatMap fst results, unlines $ map snd results)
-
 -- | Generates the code for a single Python function wrapper.
-generateFunction :: Action.ConvexFunction -> ([String], String)
-generateFunction func =
+generateFunction :: Int -> Action.ConvexFunction -> (String, [String])
+generateFunction level func =
   let funcName = Action.funcName func
       (argSignature, payloadMapping, nestedFromArgs) = generateArgSignature funcName (Action.funcArgs func)
       funcNameSnake = toSnakeCase funcName
       (rawReturnHint, isModelReturn, nestedFromReturn) = getReturnType funcName (Action.funcReturn func)
 
       handlerCall = case Action.funcType func of
-        Action.Query -> "self.client.query"
-        Action.Mutation -> "self.client.mutation"
-        Action.Action -> "self.client.action"
+        Action.Query -> "self._client.query"
+        Action.Mutation -> "self._client.mutation"
+        Action.Action -> "self._client.action"
 
+      -- The function path in the generated code should be relative to its direct parent class.
+      -- The full path is only used for display.
       fullFuncPath = "\"" ++ Action.funcPath func ++ ":" ++ funcName ++ "\""
 
       (finalReturnHint, tryBlock) = case Action.funcReturn func of
         Schema.VVoid ->
           ( "None",
             unlines
-              [ indent 3 (handlerCall ++ "(" ++ fullFuncPath ++ ", payload)"),
-                indent 3 "return"
+              [ indent (level + 2) (handlerCall ++ "(" ++ fullFuncPath ++ ", payload)"),
+                indent (level + 2) "return"
               ]
           )
         _ ->
           let hint = rawReturnHint ++ " | None"
+              rawResultDeclaration =
+                if isModelReturn
+                  then "raw_result = "
+                  else "raw_result: " ++ hint ++ " = "
               validationLogic =
                 if isModelReturn
                   then
@@ -126,42 +127,93 @@ generateFunction func =
                   else "raw_result"
               body =
                 unlines
-                  [ indent 3 ("raw_result = " ++ handlerCall ++ "(" ++ fullFuncPath ++ ", payload)"),
-                    indent 3 "if raw_result is None:",
-                    indent 4 "return None",
-                    indent 3 ("return " ++ validationLogic)
+                  [ indent (level + 2) (rawResultDeclaration ++ handlerCall ++ "(" ++ fullFuncPath ++ ", payload)"),
+                    indent (level + 2) "if raw_result is None:",
+                    indent (level + 3) "return None",
+                    indent (level + 2) ("return " ++ validationLogic)
                   ]
            in (hint, body)
 
       funcCode =
         unlines
-          [ indent 1 ("def " ++ funcNameSnake ++ "(self, " ++ argSignature ++ ") -> " ++ finalReturnHint ++ ":"),
-            indent 2 ("\"\"\"Wraps the " ++ fullFuncPath ++ " " ++ show (Action.funcType func) ++ ".\"\"\""),
-            indent 2 ("payload: dict[str, Any] = {" ++ payloadMapping ++ "}"),
-            indent 2 "try:",
+          [ indent level ("def " ++ funcNameSnake ++ "(self, " ++ argSignature ++ ") -> " ++ finalReturnHint ++ ":"),
+            indent (level + 1) ("\"\"\"Wraps the " ++ fullFuncPath ++ " " ++ show (Action.funcType func) ++ ".\"\"\""),
+            indent (level + 1) ("payload: dict[str, Any] = {" ++ payloadMapping ++ "}"),
+            indent (level + 1) "try:",
             tryBlock,
-            indent 2 "except ValidationError as e:",
-            indent 3 ("print(f\"Validation error in '" ++ funcNameSnake ++ "': {e}\")"),
-            indent 3 "raise",
-            indent 2 "except Exception as e:",
-            indent 3 ("print(f\"Error in '" ++ funcNameSnake ++ "': {e}\")"),
-            indent 3 "raise",
-            ""
+            indent (level + 1) "except ValidationError as e:",
+            indent (level + 2) ("print(f\"Validation error in '" ++ funcNameSnake ++ "': {e}\")"),
+            indent (level + 2) "raise",
+            indent (level + 1) "except Exception as e:",
+            indent (level + 2) ("print(f\"Error in '" ++ funcNameSnake ++ "': {e}\")"),
+            indent (level + 2) "raise"
           ]
-   in (nestedFromArgs ++ nestedFromReturn, funcCode)
+   in (funcCode, nestedFromArgs ++ nestedFromReturn)
 
--- | Generates the `api` class that namespaces all the generated functions.
-generateApiClass :: String -> String
-generateApiClass functionCode =
-  let header =
+-- | A tree structure representing the nested API, where each node is either
+-- a directory (leading to more nodes) or a function.
+data PathTree = FuncNode Action.ConvexFunction | DirNode (Map.Map String PathTree)
+
+-- | Builds the PathTree from a flat list of Convex functions.
+buildPathTree :: [Action.ConvexFunction] -> PathTree
+buildPathTree = foldl (flip insertFunc) (DirNode Map.empty)
+  where
+    insertFunc :: Action.ConvexFunction -> PathTree -> PathTree
+    insertFunc func (DirNode dir) = DirNode (go (splitOn "/" (Action.funcPath func)) func dir)
+    insertFunc _ node = node
+
+    go :: [String] -> Action.ConvexFunction -> Map.Map String PathTree -> Map.Map String PathTree
+    go [] func dir = Map.insert (Action.funcName func) (FuncNode func) dir
+    go (p : ps) func dir =
+      let subTree = Map.findWithDefault (DirNode Map.empty) p dir
+          newSubTree = case subTree of
+            DirNode subDirMap -> DirNode (go ps func subDirMap)
+            FuncNode _ -> error $ "Path conflict: cannot create submodule in path containing function: " ++ p
+       in Map.insert p newSubTree dir
+
+-- | Recursively generates the Python code (init lines and definitions) for the nested API structure.
+generateApiStructure :: Int -> PathTree -> ([String], [String], [String])
+generateApiStructure level (DirNode dir) =
+  let (inits, defs, nested) = foldl processEntry ([], [], []) (Map.toList dir)
+   in (inits, defs, nested)
+  where
+    processEntry (is, ds, ns) (_name, FuncNode func) =
+      let (funcDef, nestedFromFunc) = generateFunction level func
+       in (is, ds ++ [funcDef], ns ++ nestedFromFunc)
+    processEntry (is, ds, ns) (name, DirNode subDir) =
+      let className = capitalize name
+          attrName = toSnakeCase name
+          initLine = "self." ++ attrName ++ " = self." ++ className ++ "(self._client)"
+          (subInits, subDefs, nestedFromSub) = generateApiStructure (level + 1) (DirNode subDir)
+          classDef =
+            unlines $
+              [ "",
+                indent level ("class " ++ className ++ ":"),
+                indent (level + 1) "def __init__(self, client: ConvexClient):",
+                indent (level + 2) "self._client = client",
+                "",
+                ""
+              ]
+                ++ map (indent (level + 2)) subInits
+                ++ subDefs
+       in (is ++ [initLine], ds ++ [classDef], ns ++ nestedFromSub)
+generateApiStructure _ (FuncNode _) = ([], [], [])
+
+-- | The main entry point for generating the entire API class structure.
+generateApiClass :: [Action.ConvexFunction] -> (String, [String])
+generateApiClass funcs =
+  let tree = buildPathTree funcs
+      (initLines, definitionLines, nestedModels) = generateApiStructure 1 tree
+      header =
         [ "\n# --- API Client Class ---\n",
           "class API:",
           indent 1 "\"\"\"A type-safe client for your Convex API.\"\"\"",
           indent 1 "def __init__(self, client: ConvexClient):",
-          indent 2 "self.client = client",
-          ""
+          indent 2 "self._client = client"
         ]
-   in unlines (header ++ [functionCode])
+      -- The body is now correctly ordered: init lines first, then all definitions.
+      body = map (indent 2) initLines ++ definitionLines
+   in (unlines (header ++ body), nub nestedModels)
 
 -- Helper to generate Python function arguments and the payload dictionary mapping.
 generateArgSignature :: String -> [(String, Schema.ConvexType)] -> (String, String, [String])
