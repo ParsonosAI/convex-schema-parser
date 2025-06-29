@@ -37,7 +37,7 @@ runDevMode opts = do
   -- The main thread will watch for file changes.
   withManager $ \mgr -> do
     putStrLn $ "Watching for changes in: " ++ convexPath
-    watchDir
+    watchTree
       mgr
       convexPath
       (const True) -- Watch all events
