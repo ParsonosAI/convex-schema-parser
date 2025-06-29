@@ -9,13 +9,12 @@ import Data.Char (isUpper, toLower, toUpper)
 import Data.List (intercalate, isPrefixOf, nub)
 import Data.List.Split (splitOn)
 import qualified Data.Map as Map
-import Data.Maybe (catMaybes)
 
 -- Helper function to prepend a given number of spaces (4 per level).
 indent :: Int -> String -> String
 indent n s = replicate (n * 4) ' ' ++ s
 
--- | Top-level function to generate the complete Rust module source.
+-- | Generates the complete Rust module source.
 generateRustCode :: P.ParsedProject -> String
 generateRustCode project =
   unlines
@@ -30,6 +29,7 @@ generateRustCode project =
       "// serde_json = \"1.0\"",
       "// thiserror = \"1.0\"",
       "// anyhow = \"1.0\"",
+      "// futures-util = \"0.3\"",
       "",
       generateRustModuleContent project
     ]
@@ -45,14 +45,22 @@ generateRustModuleContent project =
           "use std::collections::BTreeMap;",
           "use std::fmt::{self, Display};",
           "use std::marker::PhantomData;",
+          "use futures_util::stream::Stream;",
+          "use std::pin::Pin;",
+          "use std::task::{Context, Poll};",
           "",
-          generateErrorEnum,
-          generateIdStruct,
-          apiClassCode, -- API class and all submodules
-          generateTypesModule project (nub nestedFromFuncs)
+          stripNewlines generateErrorEnum,
+          "",
+          stripNewlines generateIdStruct,
+          "",
+          stripNewlines generateSubscriptionBoilerplate,
+          "",
+          stripNewlines apiClassCode, -- API class and all submodules
+          "",
+          stripNewlines $ generateTypesModule project (nub nestedFromFuncs)
         ]
 
--- | Generates the idiomatic Rust error enum using `thiserror`.
+-- | Generates a Rust error enum using `thiserror`.
 generateErrorEnum :: String
 generateErrorEnum =
   unlines
@@ -134,6 +142,45 @@ generateIdStruct =
       "}"
     ]
 
+-- | Generates the generic TypedSubscription struct and its Stream implementation.
+generateSubscriptionBoilerplate :: String
+generateSubscriptionBoilerplate =
+  unlines
+    [ "/// A type-safe, auto-deserializing stream of updates from a Convex query subscription.",
+      "#[derive(Debug)]",
+      "pub struct TypedSubscription<T> {",
+      indent 1 "raw_subscription: convex::QuerySubscription,",
+      indent 1 "_phantom: PhantomData<T>,",
+      "}",
+      "",
+      "impl<T> Stream for TypedSubscription<T>",
+      "where",
+      indent 1 "T: for<'de> serde::Deserialize<'de>,",
+      "{",
+      indent 1 "type Item = Result<T, ApiError>;",
+      "",
+      indent 1 "fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {",
+      indent 2 "let raw_sub_pin: Pin<&mut _> = unsafe { self.map_unchecked_mut(|s| &mut s.raw_subscription) };",
+      indent 2 "match raw_sub_pin.poll_next(cx) {",
+      indent 3 "Poll::Ready(Some(result)) => {",
+      indent 4 "let item = match result {",
+      indent 5 "FunctionResult::Value(value) => {",
+      indent 6 "serde_json::from_value(value.into()).map_err(ApiError::from)",
+      indent 5 "}",
+      indent 5 "FunctionResult::ErrorMessage(s) => Err(ApiError::ConvexFunctionError(s)),",
+      indent 5 "FunctionResult::ConvexError(err) => {",
+      indent 6 "Err(ApiError::ConvexClientError(err.to_string()))",
+      indent 5 "}",
+      indent 4 "};",
+      indent 4 "Poll::Ready(Some(item))",
+      indent 3 "}",
+      indent 3 "Poll::Ready(None) => Poll::Ready(None),",
+      indent 3 "Poll::Pending => Poll::Pending,",
+      indent 2 "}",
+      indent 1 "}",
+      "}"
+    ]
+
 data PathTree = FuncNode Action.ConvexFunction | DirNode (Map.Map String PathTree) deriving (Show)
 
 buildPathTree :: [Action.ConvexFunction] -> PathTree
@@ -152,43 +199,34 @@ buildPathTree = foldl (flip insertFunc) (DirNode Map.empty)
             FuncNode _ -> error $ "Path conflict: cannot create submodule in path containing function: " ++ p
        in Map.insert p newSubTree dir
 
--- | Main entry point for generating the nested API client.
 generateApiClass :: [Action.ConvexFunction] -> (String, [String])
 generateApiClass funcs =
   let tree = buildPathTree funcs
-      (structs, impl, nested) = generateApiStructure "Api" tree
+      (structDefs, implDef, nested) = generateApiStructure "Api" tree
    in ( unlines
           [ "pub struct Api {",
             indent 1 "pub client: ConvexClient,",
             "}",
-            "",
-            onlySingleNewline $ structs,
-            onlySingleNewline $ impl
+            structDefs,
+            implDef
           ],
-        map onlySingleNewline nested
+        nested
       )
 
-onlySingleNewline :: String -> String
-onlySingleNewline s = if null s then "" else unlines (filter (not . null) (lines s))
-
--- | Recursively generates all structs and impl blocks for the API.
 generateApiStructure :: String -> PathTree -> (String, String, [String])
 generateApiStructure parentName (DirNode dirMap) =
-  let (structDefs, implDefs, nestedModels) = unzip3 $ map (uncurry processEntry) (Map.toList dirMap)
+  let (structs, impls, nested) = unzip3 $ map (uncurry processEntry) (Map.toList dirMap)
       (accessors, functions) = partitionEntries (Map.toList dirMap)
-      -- fold and keep only Justs, removing Nothing entries.
-      normalizedStructDefs = catMaybes structDefs
-      normalizedImplDefs = catMaybes implDefs
-   in ( unlines normalizedStructDefs,
+   in ( unlines structs,
         unlines
           [ "impl" ++ (if parentName == "Api" then "" else "<'a>") ++ " " ++ parentName ++ (if parentName == "Api" then "" else "<'a>") ++ " {",
             if parentName == "Api" then indent 1 "pub fn new(client: ConvexClient) -> Self {\n        Self { client }\n    }" else "",
             unlines (map generateAccessorMethod accessors),
-            unlines (map (\(_, FuncNode func) -> fst (generateFunction func)) functions),
+            unlines (concatMap generateMethodsForEntry functions),
             "}"
           ]
-          ++ unlines normalizedImplDefs,
-        concat nestedModels
+          ++ unlines impls,
+        concat nested
       )
   where
     processEntry name (DirNode subDir) =
@@ -200,10 +238,11 @@ generateApiStructure parentName (DirNode dirMap) =
                 indent 1 "client: &'a mut ConvexClient,",
                 "}"
               ]
-       in (Just $ unlines [structDef, subStructs], Just subImpls, nestedFromSub)
+       in (unlines [structDef, subStructs], subImpls, nestedFromSub)
     processEntry _ (FuncNode func) =
       let (_, nestedFromFunc) = generateFunction func
-       in (Nothing, Nothing, nestedFromFunc)
+          (_, nestedFromSub) = if Action.funcType func == Action.Query then generateSubscriptionFunction func else ("", [])
+       in ("", "", nestedFromFunc ++ nestedFromSub)
 
     partitionEntries =
       foldl
@@ -221,9 +260,17 @@ generateApiStructure parentName (DirNode dirMap) =
               indent 2 (structName ++ " { client: &mut self.client }"),
               indent 1 "}"
             ]
+
+    generateMethodsForEntry (_, FuncNode func) =
+      let (queryDef, _) = generateFunction func
+          (subDef, _) =
+            if Action.funcType func == Action.Query
+              then generateSubscriptionFunction func
+              else ("", [])
+       in [queryDef, subDef]
+    generateMethodsForEntry _ = []
 generateApiStructure _ _ = ("", "", [])
 
--- | Generates the code for a single function within an impl block.
 generateFunction :: Action.ConvexFunction -> (String, [String])
 generateFunction func =
   let funcName = Action.funcName func
@@ -234,7 +281,6 @@ generateFunction func =
         Action.Query -> "query"
         Action.Mutation -> "mutation"
         Action.Action -> "action"
-      -- Use the original full path for the doc comment.
       fullFuncPath = Action.funcPath func ++ ":" ++ funcName
       btreemapConstruction = generateBTreeMap (Action.funcArgs func)
       returnHandling = generateReturnHandling returnHint isNullable
@@ -245,6 +291,29 @@ generateFunction func =
             btreemapConstruction,
             indent 2 ("let result = self.client." ++ handlerCall ++ "(\"" ++ fullFuncPath ++ "\", args).await?;"),
             returnHandling,
+            indent 1 "}"
+          ]
+   in (funcCode, nestedFromArgs ++ nestedFromReturn)
+
+-- | Generates the `subscribe_` method.
+generateSubscriptionFunction :: Action.ConvexFunction -> (String, [String])
+generateSubscriptionFunction func =
+  let funcName = Action.funcName func
+      (argSignature, nestedFromArgs) = generateArgSignature funcName (Action.funcArgs func)
+      funcNameSnake = "subscribe_" ++ toSnakeCase funcName
+      (returnHint, _, nestedFromReturn) = getReturnType funcName (Action.funcReturn func)
+      fullFuncPath = Action.funcPath func ++ ":" ++ funcName
+      btreemapConstruction = generateBTreeMap (Action.funcArgs func)
+      funcCode =
+        unlines
+          [ indent 1 ("/// Subscribes to the `" ++ fullFuncPath ++ "` query."),
+            indent 1 ("pub async fn " ++ funcNameSnake ++ "(&mut self, " ++ argSignature ++ ") -> Result<TypedSubscription<" ++ returnHint ++ ">, ApiError> {"),
+            btreemapConstruction,
+            indent 2 ("let raw_subscription = self.client.subscribe(\"" ++ fullFuncPath ++ "\", args).await?;"),
+            indent 2 "Ok(TypedSubscription {",
+            indent 3 "raw_subscription,",
+            indent 3 "_phantom: PhantomData,",
+            indent 2 "})",
             indent 1 "}"
           ]
    in (funcCode, nestedFromArgs ++ nestedFromReturn)
@@ -497,3 +566,6 @@ toSnakeCase (c : cs) = toLower c : go cs
       | isUpper c' = '_' : toLower c' : go cs'
       | otherwise = c' : go cs'
     go "" = ""
+
+stripNewlines :: String -> String
+stripNewlines s = unlines . filter (/= "") $ lines s
