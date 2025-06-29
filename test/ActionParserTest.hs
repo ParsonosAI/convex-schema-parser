@@ -17,7 +17,8 @@ tests =
         runActionTest "parses public action with optional args" "functions/stripe" samplePublicAction expectedPublicAction,
         runActionTest "parses internal action with external type as VAny" "functions/stripe" sampleStripeSubscriptionAction expectedStripeSubscriptionAction,
         runActionTest "parses public action with external type" "functions/stripe" sampleStripeCheckoutAction sampleStripeCheckoutActionExpected,
-        runActionTest "parses public action with external type as VAny" "functions/stripe" sampleStripeSubscriptionActionPublic expectedStripeSubscriptionActionPublic
+        runActionTest "parses public action with external type as VAny" "functions/stripe" sampleStripeSubscriptionActionPublic expectedStripeSubscriptionActionPublic,
+        runActionTest "parses createAsset mutation with complex args" "functions/assets" sampleCreateAssetAction expectedCreateAssetAction
       ]
   where
     runActionTest testName path input expected =
@@ -168,5 +169,40 @@ sampleStripeCheckoutActionExpected =
             ("price_id", Schema.VString)
           ],
         Action.funcReturn = Schema.VString
+      }
+  ]
+
+sampleCreateAssetAction :: String
+sampleCreateAssetAction =
+  unlines
+    [ "export declare const createAsset: import(\"convex/server\").RegisteredMutation<\"public\", {",
+      "    projectId: import(\"convex/values\").GenericId<\"projects\">;",
+      "    linkMetadata: {",
+      "        summary: ArrayBuffer;",
+      "        sample_rate: number;",
+      "        length: number;",
+      "        linkable_uri: string;",
+      "    };",
+      "}, Promise<import(\"convex/values\").GenericId<\"assets\">>>;"
+    ]
+
+expectedCreateAssetAction :: [Action.ConvexFunction]
+expectedCreateAssetAction =
+  [ Action.ConvexFunction
+      { Action.funcName = "createAsset",
+        Action.funcPath = "functions/assets",
+        Action.funcType = Action.Mutation,
+        Action.funcArgs =
+          [ ("projectId", Schema.VId "projects"),
+            ( "linkMetadata",
+              Schema.VObject
+                [ ("summary", Schema.VBytes),
+                  ("sample_rate", Schema.VNumber),
+                  ("length", Schema.VNumber),
+                  ("linkable_uri", Schema.VString)
+                ]
+            )
+          ],
+        Action.funcReturn = Schema.VId "assets"
       }
   ]
