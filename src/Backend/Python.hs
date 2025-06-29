@@ -34,10 +34,11 @@ generatePythonCode project =
 generateHeader :: String
 generateHeader =
   unlines
-    [ "from pydantic import BaseModel, Field, ValidationError, TypeAdapter",
-      "from typing import Any, Generic, TypeVar, Literal, Iterator",
+    [ "from typing import Any, Generic, Iterator, Literal, TypeVar",
+      "",
+      "from convex import ConvexClient",
+      "from pydantic import BaseModel, TypeAdapter, ValidationError",
       "from pydantic_core import core_schema",
-      "from convex import ConvexClient, ConvexError",
       "",
       "",
       "T = TypeVar('T')",
