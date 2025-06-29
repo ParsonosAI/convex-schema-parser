@@ -8,6 +8,9 @@ It offers two primary modes of operation:
 
 2. A persistent `dev` mode that watches your Convex project for changes and automatically regenerates your clients, providing a seamless development experience.
 
+> [!IMPORTANT]
+> At the bottom you will find a USAGE section
+
 ## Prerequisites
 
 Before using the tool, please ensure your environment meets the following requirements:
@@ -136,3 +139,86 @@ targets:
 * `targets`: A opt-level key holding a list `[]` of target configurations.
 * `lang`: The target language for the client. **Must** be `Python` or `Rust`.
 * `output`: A list `[]` of file paths where the generated client code will be written. Each target can have multiple output paths.
+
+# API Usage Examples
+
+Once you have generated your client code, you can use it in your projects.
+
+## Python Client Example
+
+The generated Python client uses nested classes to mirror your Convex project's file structure.
+
+```python
+import os
+from convex import ConvexClient
+# Import the generated API module (e.g., convex_api.py)
+import convex_api
+
+# 1. Instantiate the official ConvexClient with your deployment URL.
+deployment_url = os.environ.get("CONVEX_URL")
+client = ConvexClient(deployment_url)
+
+# 2. Instantiate your generated API, wrapping the client.
+# The `set_admin_auth` method is used here to set the admin key for subsequent calls.
+# This key is required for calling internal functions.
+auth_key = get_auth_key()  # Replace with your method to get the auth key if required
+client.set_auth(auth_key)
+
+api = convex_api.API(client)
+
+# 3. Call functions using the nested structure.
+# This corresponds to the function `getProject` in `convex/functions/projects.ts`.
+# The generated API reraises any exceptions from the Convex client, so you can handle them as needed.
+# Additionally, we use `pydantic` for type validation, so we raise these exceptions as well.
+try:
+    project_id = convex_api.Id("prj_...")
+    project = api.functions.projects.get_project(project_id)
+    if project:
+        print(f"Successfully fetched project: {project.project_name}")
+    else:
+        print("Project not found.")
+except Exception as e:
+    print(f"An error occurred: {e}")
+```
+
+## Rust Client Example
+
+The generated Rust client uses a method-based API which works with Rust's ownership and borrowing rules.
+
+```rust
+// Assuming the generated module is named `convex_api`.
+use convex_api::{Api, Id, types::ProjectsDoc};
+use convex::ConvexClient;
+use anyhow::Result;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // 1. Instantiate and authenticate the official ConvexClient.
+    let convex_url = std::env::var("CONVEX_URL")?;
+    let auth_key = get_auth_key(); // Replace with your method to get the auth key if required
+    
+    let mut convex_client = ConvexClient::new(&convex_url).await?;
+    convex_client.set_auth(&auth_key);
+
+    // 2. Instantiate your generated API, wrapping the client.
+    let mut api = Api::new(convex_client);
+
+    // 3. Call functions using the nested, method-chaining API.
+    let project_id = Id::<ProjectsDoc>::new("prj_...".to_string());
+    
+    // This corresponds to the function `getProject` in `convex/functions/projects.ts`.
+    match api.functions().projects().get_project(&project_id).await {
+        Ok(Some(project)) => {
+            println!("Successfully fetched project: {}", project.project_name.unwrap_or_default());
+        }
+        Ok(None) => {
+            println!("Project not found.");
+        }
+        Err(e) => {
+            eprintln!("An error occurred: {}", e);
+        }
+    }
+
+    Ok(())
+}
+```
