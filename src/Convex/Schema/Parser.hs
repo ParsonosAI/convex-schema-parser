@@ -76,6 +76,7 @@ data ConvexType
   = VString -- e.g., v.string()
   | VNumber -- e.g., v.number()
   | VBoolean -- e.g., v.boolean()
+  | VBytes -- e.g., v.bytes()
   | VNull -- e.g., v.null()
   | VAny -- e.g., v.any()
   | VId String -- e.g., v.id("user_id")
@@ -199,6 +200,7 @@ convexTypeParser =
         "string" -> VString <$ parens (return ())
         "number" -> VNumber <$ parens (return ())
         "boolean" -> VBoolean <$ parens (return ())
+        "bytes" -> VBytes <$ parens (return ())
         "null" -> VNull <$ parens (return ())
         "any" -> VAny <$ parens (return ())
         "id" -> VId <$> parens stringLiteral

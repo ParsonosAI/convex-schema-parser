@@ -275,6 +275,7 @@ toPythonTypeParts nameHint typ = case typ of
   Schema.VString -> ("str", False, False, [])
   Schema.VNumber -> ("float", False, False, [])
   Schema.VBoolean -> ("bool", False, False, [])
+  Schema.VBytes -> ("bytes", False, False, [])
   Schema.VAny -> ("Any", False, False, [])
   Schema.VNull -> ("None", True, False, [])
   Schema.VId t -> ("Id['" ++ toClassName t ++ "']", False, False, [])

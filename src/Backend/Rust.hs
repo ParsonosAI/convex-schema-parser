@@ -485,6 +485,7 @@ toRustType nameHint typ = case typ of
   Schema.VNumber -> ("f64", [])
   Schema.VBoolean -> ("bool", [])
   Schema.VAny -> ("serde_json::Value", [])
+  Schema.VBytes -> ("Vec<u8>", [])
   Schema.VNull -> ("()", [])
   Schema.VId t -> ("Id<types::" ++ toPascalCase t ++ "Doc>", [])
   Schema.VArray inner ->
@@ -539,6 +540,7 @@ toRustBorrowType rustType
   | rustType == "f64" = "f64"
   | rustType == "bool" = "bool"
   | rustType == "serde_json::Value" = "&serde_json::Value"
+  | rustType == "Vec<u8>" = "&[u8]"
   | "Id<" `isPrefixOf` rustType = "&" ++ rustType
   | "Vec<" `isPrefixOf` rustType = let inner = take (length rustType - 5) (drop 4 rustType) in "&[" ++ inner ++ "]"
   | "Option<" `isPrefixOf` rustType = let inner = take (length rustType - 8) (drop 7 rustType) in "Option<" ++ toRustBorrowType inner ++ ">"
