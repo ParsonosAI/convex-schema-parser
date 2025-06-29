@@ -484,6 +484,8 @@ toRustType nameHint typ = case typ of
   Schema.VString -> ("String", [])
   Schema.VNumber -> ("f64", [])
   Schema.VBoolean -> ("bool", [])
+  Schema.VInt64 -> ("i64", [])
+  Schema.VFloat64 -> ("f64", [])
   Schema.VAny -> ("serde_json::Value", [])
   Schema.VBytes -> ("Vec<u8>", [])
   Schema.VNull -> ("()", [])
@@ -537,8 +539,6 @@ toRustType nameHint typ = case typ of
 toRustBorrowType :: String -> String
 toRustBorrowType rustType
   | rustType == "String" = "&str"
-  | rustType == "f64" = "f64"
-  | rustType == "bool" = "bool"
   | rustType == "serde_json::Value" = "&serde_json::Value"
   | rustType == "Vec<u8>" = "&[u8]"
   | "Id<" `isPrefixOf` rustType = "&" ++ rustType

@@ -61,7 +61,8 @@ langDef =
           "void",
           "GenericId",
           "DefaultFunctionArgs",
-          "ArrayBuffer"
+          "ArrayBuffer",
+          "bigint"
         ],
       Token.caseSensitive = True
     }
@@ -116,6 +117,7 @@ dtsTypeParser = do
         <|> (Schema.VNumber <$ try (reserved "number"))
         <|> (Schema.VBoolean <$ try (reserved "boolean"))
         <|> (Schema.VBytes <$ try (reserved "ArrayBuffer"))
+        <|> (Schema.VInt64 <$ try (reserved "bigint"))
         <|> (Schema.VAny <$ try (reserved "any"))
         <|> (Schema.VLiteral <$> try stringLiteral)
         <|> (Schema.VId <$> try genericIdParser)

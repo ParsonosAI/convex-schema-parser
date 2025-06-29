@@ -75,6 +75,8 @@ data Field = Field
 data ConvexType
   = VString -- e.g., v.string()
   | VNumber -- e.g., v.number()
+  | VInt64 -- e.g., v.int64()
+  | VFloat64 -- e.g., v.float64()
   | VBoolean -- e.g., v.boolean()
   | VBytes -- e.g., v.bytes()
   | VNull -- e.g., v.null()
@@ -201,6 +203,8 @@ convexTypeParser =
         "number" -> VNumber <$ parens (return ())
         "boolean" -> VBoolean <$ parens (return ())
         "bytes" -> VBytes <$ parens (return ())
+        "int64" -> VInt64 <$ parens (return ())
+        "float64" -> VFloat64 <$ parens (return ())
         "null" -> VNull <$ parens (return ())
         "any" -> VAny <$ parens (return ())
         "id" -> VId <$> parens stringLiteral
