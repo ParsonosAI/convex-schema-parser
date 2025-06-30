@@ -31,6 +31,7 @@ executable convex-schema-parser
     main-is:          Main.hs
     other-modules:    Dev
         , Config
+        , Init
     build-depends:    base,
                       convex-schema-parser-lib,
                       parsec,

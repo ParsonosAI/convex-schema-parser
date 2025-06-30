@@ -33,7 +33,9 @@ data TargetConfig = TargetConfig
 instance FromJSON TargetConfig
 
 data Config = Config
-  { targets :: [TargetConfig]
+  { project_path :: FilePath,
+    declarations_dir :: FilePath,
+    targets :: [TargetConfig]
   }
   deriving (Show, Generic)
 

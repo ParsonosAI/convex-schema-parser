@@ -7,6 +7,7 @@ import qualified Convex.Parser as P
 import Data.List (intercalate)
 import Dev (runDevMode)
 import qualified Dev
+import qualified Init
 import Options.Applicative
 import System.Directory (doesFileExist)
 import System.Exit (exitFailure)
@@ -14,6 +15,7 @@ import System.Exit (exitFailure)
 data Command
   = Generate GenerateOptions
   | Dev DevCliOptions
+  | Init InitOptions
 
 data GenerateOptions = GenerateOptions
   { schemaPath :: FilePath,
@@ -23,8 +25,11 @@ data GenerateOptions = GenerateOptions
   }
 
 data DevCliOptions = DevCliOptions
-  { projectPath :: FilePath,
-    configPath :: FilePath
+  { devCliConfigPath :: FilePath
+  }
+
+data InitOptions = InitOptions
+  { initConfigPath :: FilePath
   }
 
 -- We can reuse the GenTarget Read instance from Config.hs if it were exported,
@@ -71,11 +76,6 @@ devCliOptionsParser :: Parser DevCliOptions
 devCliOptionsParser =
   DevCliOptions
     <$> strOption
-      ( long "path"
-          <> metavar "PROJECT_PATH"
-          <> help "Path to the root of your convex project directory"
-      )
-    <*> strOption
       ( long "config"
           <> metavar "CONFIG_FILE"
           <> value "convex-parser.yaml"
@@ -83,11 +83,23 @@ devCliOptionsParser =
           <> help "Path to the YAML config file"
       )
 
+initOptionsParser :: Parser InitOptions
+initOptionsParser =
+  InitOptions
+    <$> strOption
+      ( long "config"
+          <> metavar "CONFIG_FILE"
+          <> value "convex-parser.yaml"
+          <> showDefault
+          <> help "Path where the default YAML config file will be created"
+      )
+
 commandParser :: Parser Command
 commandParser =
   subparser
-    ( command "generate" (info (Generate <$> generateOptionsParser) (progDesc "Generate a client once and exit"))
-        <> command "dev" (info (Dev <$> devCliOptionsParser) (progDesc "Watch for changes and regenerate clients from a config file"))
+    ( command "generate" (info (Generate <$> generateOptionsParser <**> helper) (progDesc "Generate a client once and exit"))
+        <> command "dev" (info (Dev <$> devCliOptionsParser <**> helper) (progDesc "Watch for changes and regenerate clients from a config file"))
+        <> command "init" (info (Init <$> initOptionsParser <**> helper) (progDesc "Initialize a descriptive default config"))
     )
 
 main :: IO ()
@@ -96,6 +108,7 @@ main = do
   case cmd of
     Generate opts -> runGenerate opts
     Dev opts -> runDev opts
+    Init opts -> Init.runInit (initConfigPath opts)
   where
     optsParserInfo =
       info
@@ -123,19 +136,19 @@ runGenerate opts = do
 
 runDev :: DevCliOptions -> IO ()
 runDev opts = do
-  configExists <- doesFileExist (configPath opts)
+  configExists <- doesFileExist (devCliConfigPath opts)
   if not configExists
     then do
-      putStrLn $ "Error: Config file not found at " ++ configPath opts
+      putStrLn $ "Error: Config file not found at " ++ devCliConfigPath opts
       exitFailure
     else do
-      configResult <- Config.loadConfig (configPath opts)
+      configResult <- Config.loadConfig (devCliConfigPath opts)
       case configResult of
         Left err -> do
           putStrLn "Error parsing config file:"
           print err
           exitFailure
         Right config ->
-          let declarationsDir = projectPath opts ++ "/tmp/declarations"
-              devOpts = Dev.DevOptions (projectPath opts) declarationsDir config
-           in runDevMode devOpts
+          let declarationsDir = Config.declarations_dir config
+              devOpts = Dev.DevOptions (Config.project_path config) declarationsDir config
+           in runDevMode config

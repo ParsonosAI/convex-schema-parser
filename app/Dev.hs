@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 
 module Dev (runDevMode, DevOptions (..)) where
@@ -13,7 +14,7 @@ import Control.Exception
 import Control.Exception (evaluate)
 import Control.Monad (forM_, forever, when)
 import qualified Convex.Parser as P
-import System.Directory (doesFileExist)
+import System.Directory (doesFileExist, findExecutable)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FSNotify
 import System.IO.Error (isAlreadyInUseError)
@@ -25,14 +26,26 @@ data DevOptions = DevOptions
     config :: Config.Config
   }
 
+-- | Searches for an available package manager, preferring pnpm.
+findPackageManager :: IO (Maybe String)
+findPackageManager = do
+  pnpmPath <- findExecutable "pnpm"
+  case pnpmPath of
+    Just _ -> return (Just "pnpm")
+    Nothing -> do
+      npmPath <- findExecutable "npm"
+      case npmPath of
+        Just _ -> return (Just "npm")
+        Nothing -> return Nothing
+
 -- | Runs the development mode file watcher with debouncing.
-runDevMode :: DevOptions -> IO ()
-runDevMode opts = do
+runDevMode :: Config.Config -> IO ()
+runDevMode config = do
   -- TVar to signal that a change has occurred.
   dirtyVar <- newTVarIO True -- Start dirty to trigger an initial run.
 
   -- Fork a worker thread that handles the generation.
-  _ <- forkIO (workerThread dirtyVar opts)
+  _ <- forkIO (workerThread dirtyVar config)
 
   -- The main thread will watch for file changes.
   withManager $ \mgr -> do
@@ -50,15 +63,15 @@ runDevMode opts = do
     -- Keep the main thread alive.
     forever $ threadDelay 1000000
   where
-    convexPath = convexProjectPath opts ++ "/convex"
+    convexPath = Config.project_path config ++ "/convex"
     showEvent (Added path _ _) = "Added: " ++ path
     showEvent (Modified path _ _) = "Modified: " ++ path
     showEvent (Removed path _ _) = "Removed: " ++ path
     showEvent _ = "Unknown event"
 
 -- | The worker thread loop that performs debouncing.
-workerThread :: TVar Bool -> DevOptions -> IO ()
-workerThread dirtyVar opts = forever $ do
+workerThread :: TVar Bool -> Config.Config -> IO ()
+workerThread dirtyVar config = forever $ do
   -- Wait for a signal that something has changed.
   atomically $ do
     dirty <- readTVar dirtyVar
@@ -75,28 +88,30 @@ workerThread dirtyVar opts = forever $ do
   isDirty <- atomically (readTVar dirtyVar)
   if isDirty
     then putStrLn "[Worker] Further changes detected. Restarting debounce timer."
-    else handleGenerationEvent opts
+    else handleGenerationEvent config
 
 -- | Handles the logic for regenerating declarations and the clients.
-handleGenerationEvent :: DevOptions -> IO ()
-handleGenerationEvent opts@DevOptions {..} = do
-  putStrLn "[Worker] Regenerating .d.ts files..."
-  let pnpmCmd = (proc "pnpm" ["declarations"]) {cwd = Just convexProjectPath}
-  (_, _, _, pnpmHandle) <- createProcess pnpmCmd
-  exitCode <- waitForProcess pnpmHandle
-
-  case exitCode of
-    ExitSuccess -> do
-      putStrLn "[Worker] Declaration files regenerated successfully."
-      generateAndWriteCode opts
-    ExitFailure code ->
-      putStrLn $ "[Worker] Error: 'pnpm declarations' failed with exit code " ++ show code
+handleGenerationEvent :: Config.Config -> IO ()
+handleGenerationEvent config = do
+  findPackageManager >>= \case
+    Nothing -> putStrLn "\n[ERROR] Neither 'pnpm' nor 'npm' could be found in your system's PATH.\nPlease install one of them to use the dev watcher.\n"
+    Just pm -> do
+      putStrLn "[Worker] Regenerating .d.ts files..."
+      let pkgMgrCmd = (proc pm ["declarations"]) {cwd = Just $ Config.project_path config}
+      (_, _, _, pkgMgrHandle) <- createProcess pkgMgrCmd
+      exitCode <- waitForProcess pkgMgrHandle
+      case exitCode of
+        ExitSuccess -> do
+          putStrLn "[Worker] Declaration files regenerated successfully."
+          generateAndWriteCode config
+        ExitFailure code ->
+          putStrLn $ "[Worker] Error: 'pnpm declarations' failed with exit code " ++ show code
 
 -- | Generates the code and writes it to the target files if it has changed.
-generateAndWriteCode :: DevOptions -> IO ()
-generateAndWriteCode DevOptions {..} = do
+generateAndWriteCode :: Config.Config -> IO ()
+generateAndWriteCode config = do
   putStrLn "[Worker] Parsing schema and generating clients..."
-  projectResult <- P.parseProject (convexProjectPath ++ "/convex/schema.ts") declarationsDir
+  projectResult <- P.parseProject (Config.project_path config ++ "/convex/schema.ts") $ Config.declarations_dir config
   case projectResult of
     Left err ->
       putStrLn $ "[Worker] Error parsing project: " ++ err
