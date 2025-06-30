@@ -1,0 +1,93 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }} (${{ matrix.arch }})
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        arch: [x86_64]
+        include:
+          - os: macos-latest
+            arch: aarch64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Haskell
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.6'
+          cabal-version: 'latest'
+          architecture: ${{ matrix.arch }}
+
+      - name: Cache Cabal store
+        uses: actions/cache@v4
+        with:
+          path: ~/.cabal/store
+          key: ${{ runner.os }}-${{ matrix.arch }}-ghc-9.6-${{ hashFiles('**/*.cabal', '**/cabal.project.freeze') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-ghc-9.6-
+
+      - name: Update Cabal
+        run: cabal update
+
+      - name: Build with Cabal
+        run: cabal build --enable-executable-stripping
+
+      - name: Prepare Artifact
+        shell: bash
+        run: |
+          # Determine the OS-specific names and extensions.
+          if [ "${{ runner.os }}" == "Windows" ]; then
+            OS_NAME="windows"
+            EXE_NAME="convex-schema-parser.exe"
+            ARCHIVE_NAME="convex-schema-parser-${OS_NAME}-${{ matrix.arch }}.zip"
+            cp "$(cabal list-bin exe:convex-schema-parser)" "$EXE_NAME"
+            zip "$ARCHIVE_NAME" "$EXE_NAME"
+          else
+            OS_NAME=$(echo "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')
+            EXE_NAME="convex-schema-parser"
+            ARCHIVE_NAME="convex-schema-parser-${OS_NAME}-${{ matrix.arch }}.tar.gz"
+            cp "$(cabal list-bin exe:convex-schema-parser)" "$EXE_NAME"
+            tar -czvf "$ARCHIVE_NAME" "$EXE_NAME"
+          fi
+          echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
+        id: prepare
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.prepare.outputs.ARCHIVE_NAME }}
+          path: ${{ steps.prepare.outputs.ARCHIVE_NAME }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create download directory
+        run: mkdir -p downloads
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloads
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: downloads/*/*
