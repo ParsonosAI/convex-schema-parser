@@ -15,13 +15,14 @@ It offers two primary modes of operation:
 
 Before using the tool, please ensure your environment meets the following requirements:
 
-### 1. `pnpm` Installation
+### 1. `pnpm` or `npm` Installation
 
-The tool shells out to your package manager to generate TypeScript declaration files (`.d.ts`). You must have `pnpm` installed and available in your system's PATH.
+The tool shells out to your package manager to generate TypeScript declaration files (`.d.ts`). You must have `pnpm` or `npm` installed and available in your system's PATH.
 
 ### 2. `package.json` Script
 
 Your Convex project's `package.json` must contain a script named `declarations`. This script is responsible for running all the necessary steps to generate the `.d.ts` files for the parser to read. This often involves cleaning old artifacts, running the TypeScript compiler, and copying over pre-generated files.
+Everything here will also be explained when you issue `convex-schema-parser init`, this command will also create a template `convex-parser.yaml` file.
 
 **Example `package.json`:**
 
@@ -101,12 +102,10 @@ cabal run convex-schema-parser -- generate \
 This is the recommended mode for local development. It starts a persistent process that watches your `convex/` directory for any file changes. When a change is detected, it automatically runs the `pnpm declarations` (or `npm run declarations`) script and regenerates all clients defined in your configuration file.
 
 ```bash
-convex-schema-parser dev --path <path> [--config <path>]
+convex-schema-parser dev [--config <path>]
 ```
 
 ### Arguments:
-
-* `--path`: (Required) The path to the root of your Convex project directory (the one containing `package.json` and the `convex/` folder).
 
 * `--config`: (Optional) The path to your YAML configuration file. Defaults to `convex-parser.yaml` in the current working directory.
 
@@ -117,25 +116,35 @@ The `dev` mode is driven by a YAML configuration file. This file allows you to d
 ### Example `convex-parser.yaml`:
 
 ```yaml
-# A list of generation targets. You can have one or more.
+# Configuration for the Convex Client Generator.
+
+# (Required) The absolute path to the root of your Convex project.
+# This is the directory that contains the `convex/` folder and `package.json`.
+# ABSOLUTE: SO no `~`/`$HOME`, etc.
+project_path: \"/path/to/your/convex/project\"
+
+# (Required) The absolute path to the generated TypeScript declarations, relative to `project_path`.
+declarations_dir: \"/path/to/your/tmp/declarations\"
+
+# (Required) A list of generation targets. You can have one or more.
 targets:
-
-  # Target 1: Generate a Rust client for a backend service.
+  # Example 1: Generate a Rust client for a backend service.
   - lang: Rust
-    # A list of output files. The generated code will be written to all of them.
+    # A list of one or more output files for this target.
     output:
-      - /path/to/my-rust-backend/src/convex_api.rs
+      - ../my-rust-app/src/convex_api.rs
+      - ../my-other-app/src/convex_api.rs
 
-  # Target 2: Generate a Python client for something else.
+  # Example 2: Generate a Python client for data scripts.
   - lang: Python
     output:
-      - /path/to/my-python-scripts/lib/convex_client.py
-      # You can specify multiple output paths for the same target.
-      - /path/to/another-project/shared/convex_client.py
+      - ../scripts/lib/convex_client.py
 ```
 
 ### Configuration Schema:
 
+* `project_path`: The absolute path to your Convex project root directory. This directory should contain the `convex/` folder and a `package.json` file.
+* `declarations_dir`: The absolute path to the directory where your TypeScript declaration files (`.d.ts`) are generated. This should be the output directory specified in your `tsconfig.declarations.json`.
 * `targets`: A opt-level key holding a list `[]` of target configurations.
 * `lang`: The target language for the client. **Must** be `Python` or `Rust`.
 * `output`: A list `[]` of file paths where the generated client code will be written. Each target can have multiple output paths.
@@ -273,7 +282,7 @@ async fn run_subscription() -> anyhow::Result<()> {
 
     // 2. The `while let` loop asynchronously polls the stream for new items.
     while let Some(result) = project_subscription.next().await {
-        // 3. Each `result` is a `Result<T, ApiError>`, where T is the strongly-typed
+        // 3. Each `result` is a `Result<T, ApiError>`, where T is your strongly-typed
         //    return value (e.g., Vec<FetchProjectsReturnObject>).
         match result {
             Ok(updated_projects) => {
