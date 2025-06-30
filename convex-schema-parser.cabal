@@ -15,6 +15,7 @@ library convex-schema-parser-lib
     exposed-modules:  Convex.Schema.Parser
         , Convex.Action.Parser
         , Convex.Parser
+        , PathTree
         , Backend.Python
         , Backend.Rust
     build-depends:    base
