@@ -11,7 +11,31 @@ It offers two primary modes of operation:
 > [!IMPORTANT]
 > At the bottom you will find a USAGE section
 
+## Installation
+
+The easiest way to use `convex-schema-parser` is currently through the Cabal package manager.
+We provide prebuilt binaries for `linux` & `macOS` that you can download and run directly, but `macOS` users have to allow the binary to run first since we do not sign it (yet).
+A `npm` package `@parsonosai/convex-schema-parser` is also on its way and supported as soon as we get code-signing ready, we currently use a placeholder.
+
+Installing `cabal` & `ghc` is best done using [`ghcup`](https://www.haskell.org/ghcup/). As soon as it is installed:
+
+```bash
+ghcup install ghc 9.10.1
+ghcup install cabal 3.10.3.0
+```
+
+You can then build/run the tool from source.
+
+```bash
+cabal update
+cabal install convex-schema-parser # If you have $HOME/.cabal/bin in your PATH.
+cabal run convex-schema-parser -- --help # If you do not want to install it globally and just run it.
+```
+
 ## Prerequisites
+
+> [!NOTE]
+> Everything here is also explained when you issue `conves-schema-parser init`.
 
 Before using the tool, please ensure your environment meets the following requirements:
 
@@ -75,6 +99,9 @@ This command parses your project once, generates the specified client, and then 
 
 ```bash
 convex-schema-parser generate --schema <path> --declarations <path> --target <lang> [-o <output_file>]
+
+# Or if you are not using the installed binary but via cabal (same for the other commands):
+cabal run convex-schema-parser -- generate --schema <path> --declarations <path> --target <lang> [-o <output_file>]
 ```
 
 ### Arguments:
@@ -121,10 +148,10 @@ The `dev` mode is driven by a YAML configuration file. This file allows you to d
 # (Required) The absolute path to the root of your Convex project.
 # This is the directory that contains the `convex/` folder and `package.json`.
 # ABSOLUTE: SO no `~`/`$HOME`, etc.
-project_path: \"/path/to/your/convex/project\"
+project_path: /path/to/your/convex/project
 
 # (Required) The absolute path to the generated TypeScript declarations, relative to `project_path`.
-declarations_dir: \"/path/to/your/tmp/declarations\"
+declarations_dir: /path/to/your/tmp/declarations
 
 # (Required) A list of generation targets. You can have one or more.
 targets:
