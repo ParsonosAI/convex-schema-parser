@@ -10,8 +10,6 @@ module Convex.Action.Parser
 where
 
 import Control.Monad (void)
-import Control.Monad.IO.Class (MonadIO (..))
-import Convex.Schema.Parser (parens)
 import qualified Convex.Schema.Parser as Schema
 import Data.Functor (($>))
 import Text.Parsec
@@ -69,6 +67,9 @@ langDef =
 
 lexer :: Token.GenTokenParser String Schema.ParserState IO
 lexer = Token.makeTokenParser langDef
+
+parens :: SchemaParser a -> SchemaParser a
+parens = Token.parens lexer
 
 whiteSpace :: SchemaParser ()
 whiteSpace = Token.whiteSpace lexer

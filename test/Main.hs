@@ -2,6 +2,8 @@ module Main (main) where
 
 import qualified ActionParserTest
 import qualified ApiParserTest
+import qualified RustSerializationTest
+import qualified SchemaParserTest
 import System.Exit (exitFailure, exitSuccess)
 import Test.HUnit
 
@@ -11,7 +13,9 @@ main = do
   let allTests =
         TestList
           [ ApiParserTest.tests,
-            ActionParserTest.tests
+            ActionParserTest.tests,
+            SchemaParserTest.tests
+            -- RustSerializationTest.tests
           ]
 
   -- Run the combined test suite
