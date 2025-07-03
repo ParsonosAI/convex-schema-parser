@@ -51,6 +51,8 @@ test-suite test-convex-parser
     main-is:             Main.hs
     other-modules:       ActionParserTest
         , ApiParserTest
+        , SchemaParserTest
+        , RustSerializationTest
     hs-source-dirs:      test
     build-depends:       base,
                          HUnit,

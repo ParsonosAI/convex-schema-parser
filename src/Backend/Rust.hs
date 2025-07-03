@@ -1,20 +1,24 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Backend.Rust (generateRustCode) where
+module Backend.Rust
+  ( generateRustCode,
+    generateApiClass,
+  )
+where
 
 import qualified Convex.Action.Parser as Action
 import qualified Convex.Parser as P
 import qualified Convex.Schema.Parser as Schema
 import Data.Char (isUpper, toLower, toUpper)
-import Data.List (intercalate, isPrefixOf, nub)
-import qualified Data.Map.Strict as Map
+import Data.List (intercalate, isInfixOf, isPrefixOf, nub)
+import qualified Data.Map as Map
 import PathTree
 
 -- Helper function to prepend a given number of spaces (4 per level).
 indent :: Int -> String -> String
 indent n s = replicate (n * 4) ' ' ++ s
 
--- | Generates the complete Rust module source.
+-- | Top-level function to generate the complete Rust module source.
 generateRustCode :: P.ParsedProject -> String
 generateRustCode project =
   unlines
@@ -40,12 +44,12 @@ generateRustModuleContent project =
   let (apiClassCode, nestedFromFuncs) = generateApiClass (P.ppFunctions project)
    in unlines
         [ "use convex::{ConvexClient, FunctionResult, Value};",
+          "use futures_util::stream::Stream;",
           "use serde::{Deserialize, Deserializer, Serialize, Serializer};",
           "use serde_json;",
           "use std::collections::BTreeMap;",
           "use std::fmt::{self, Display};",
           "use std::marker::PhantomData;",
-          "use futures_util::stream::Stream;",
           "use std::pin::Pin;",
           "use std::task::{Context, Poll};",
           "",
@@ -271,13 +275,12 @@ generateFunction func =
           [ indent 1 ("/// Wraps the `" ++ fullFuncPath ++ "` " ++ show (Action.funcType func) ++ "."),
             indent 1 ("pub async fn " ++ funcNameSnake ++ "(&mut self, " ++ argSignature ++ ") -> Result<" ++ returnHint ++ ", ApiError> {"),
             btreemapConstruction,
-            indent 2 ("let result = self.client." ++ handlerCall ++ "(\"" ++ fullFuncPath ++ "\", args).await?;"),
+            indent 2 ("let result = self.client." ++ handlerCall ++ "(\"" ++ fullFuncPath ++ "\", btmap).await?;"),
             returnHandling,
             indent 1 "}"
           ]
    in (funcCode, nestedFromArgs ++ nestedFromReturn)
 
--- | Generates the `subscribe_` method.
 generateSubscriptionFunction :: Action.ConvexFunction -> (String, [String])
 generateSubscriptionFunction func =
   let funcName = Action.funcName func
@@ -291,7 +294,7 @@ generateSubscriptionFunction func =
           [ indent 1 ("/// Subscribes to the `" ++ fullFuncPath ++ "` query."),
             indent 1 ("pub async fn " ++ funcNameSnake ++ "(&mut self, " ++ argSignature ++ ") -> Result<TypedSubscription<" ++ returnHint ++ ">, ApiError> {"),
             btreemapConstruction,
-            indent 2 ("let raw_subscription = self.client.subscribe(\"" ++ fullFuncPath ++ "\", args).await?;"),
+            indent 2 ("let raw_subscription = self.client.subscribe(\"" ++ fullFuncPath ++ "\", btmap).await?;"),
             indent 2 "Ok(TypedSubscription {",
             indent 3 "raw_subscription,",
             indent 3 "_phantom: PhantomData,",
@@ -325,15 +328,15 @@ generateTableStruct table =
   let className = toPascalCase (Schema.tableName table) ++ "Doc"
       (fieldLines, nestedFromFields) = unzip $ map (generateField className) (Schema.tableFields table)
    in ( unlines
-          [ indent 1 "#[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq)]",
-            indent 1 ("pub struct " ++ className ++ " {"),
-            indent 2 "#[serde(default)]",
-            indent 2 ("pub _id: Id<" ++ className ++ ">,"),
-            indent 2 "#[serde(default)]",
-            indent 2 "#[serde(rename = \"_creationTime\")]",
-            indent 2 "pub creation_time: f64,",
+          [ "#[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq)]",
+            ("pub struct " ++ className ++ " {"),
+            indent 1 "#[serde(default)]",
+            indent 1 ("pub _id: Id<" ++ className ++ ">,"),
+            indent 1 "#[serde(default)]",
+            indent 1 "#[serde(rename = \"_creationTime\")]",
+            indent 1 "pub creation_time: f64,",
             unlines fieldLines,
-            indent 1 "}"
+            "}"
           ],
         concat nestedFromFields
       )
@@ -393,34 +396,37 @@ generateArgSignature funcName args =
    in (intercalate ", " sigParts, nestedModels)
 
 generateBTreeMap :: [(String, Schema.ConvexType)] -> String
-generateBTreeMap [] = indent 2 "let args = BTreeMap::new();"
-generateBTreeMap args =
+generateBTreeMap [] = indent 2 "let btmap = BTreeMap::new();"
+generateBTreeMap btmap =
   let buildStmts (name, convexType) =
         let varName = toSnakeCase name
-         in if isComplexType convexType
-              then indent 2 ("args.insert(\"" ++ name ++ "\".to_string(), Value::try_from(serde_json::to_value(" ++ varName ++ ")?)?);")
-              else indent 2 ("args.insert(\"" ++ name ++ "\".to_string(), Value::from(" ++ toClonedValue varName convexType ++ "));")
+         in if isObject convexType
+              then indent 1 ("btmap.insert(\"" ++ name ++ "\".to_string(), " ++ varName ++ ".to_convex_value()?);")
+              else indent 1 ("btmap.insert(\"" ++ name ++ "\".to_string(), " ++ fieldToConvexValue (varName, convexType) ++ ");")
    in unlines
-        [ indent 2 "let mut args = BTreeMap::new();",
-          unlines $ map buildStmts args
+        [ indent 2 "let mut btmap = BTreeMap::new();",
+          unlines $ map buildStmts btmap
         ]
 
-isComplexType :: Schema.ConvexType -> Bool
-isComplexType (Schema.VObject _) = True
-isComplexType (Schema.VArray _) = True
-isComplexType (Schema.VUnion _) = True
-isComplexType (Schema.VReference _) = True
-isComplexType Schema.VAny = True
-isComplexType _ = False
+fieldToConvexValue :: (String, Schema.ConvexType) -> String
+fieldToConvexValue (fieldName, t) =
+  let fieldNameSnake = toSnakeCase fieldName
+      valueExpr = innerValueToConvexOptional fieldNameSnake t
+   in valueExpr
+
+isObject :: Schema.ConvexType -> Bool
+isObject (Schema.VObject _) = True
+isObject _ = False
 
 toClonedValue :: String -> Schema.ConvexType -> String
 toClonedValue varName (Schema.VString) = varName ++ ".to_string()"
 toClonedValue varName t
-  | isPassedByCopy t = varName
+  | isPassedByCopy t = "*" ++ varName
   | otherwise = varName ++ ".clone()"
 
 isPassedByCopy :: Schema.ConvexType -> Bool
 isPassedByCopy Schema.VNumber = True
+isPassedByCopy Schema.VInt64 = True
 isPassedByCopy Schema.VBoolean = True
 isPassedByCopy _ = False
 
@@ -461,17 +467,101 @@ generateReturnHandling _ isNullable =
           indent 2 "}"
         ]
 
+generateToConvexValueImpl :: String -> [(String, Schema.ConvexType)] -> String
+generateToConvexValueImpl structName fields =
+  let buildMapInserts (fieldName, fieldType) =
+        let conversionBlock = generateFieldToConvexValue (fieldName, fieldType)
+         in indent 3 conversionBlock
+      mapInserts = unlines $ map buildMapInserts fields
+   in unlines
+        [ "impl " ++ structName ++ " {",
+          indent 1 "pub fn to_convex_value(&self) -> Result<Value, ApiError> {",
+          indent 2 "let mut btmap = BTreeMap::new();",
+          mapInserts,
+          indent 2 "Ok(Value::Object(btmap))",
+          indent 1 "}",
+          "}"
+        ]
+
+generateFieldToConvexValue :: (String, Schema.ConvexType) -> String
+generateFieldToConvexValue (fieldName, Schema.VOptional inner) =
+  let fieldNameSnake = toSnakeCase fieldName
+      -- `v` is the unwrapped value from the Option.
+      valueExpr = innerValueToConvexOptional "v" inner
+   in unlines
+        [ "if let Some(v) = &self." ++ fieldNameSnake ++ " {",
+          indent 1 ("btmap.insert(\"" ++ fieldName ++ "\".to_string(), " ++ valueExpr ++ ");"),
+          "}"
+        ]
+generateFieldToConvexValue (fieldName, fieldType) =
+  let fieldNameSnake = toSnakeCase fieldName
+      valueExpr = innerValueToConvexNonOptional ("self." ++ fieldNameSnake) fieldType
+   in "btmap.insert(\"" ++ fieldName ++ "\".to_string(), " ++ valueExpr ++ ");"
+
+-- | Generates the conversion for a non-optional inner value.
+innerValueToConvexOptional :: String -> Schema.ConvexType -> String
+innerValueToConvexOptional varName (Schema.VArray inner) =
+  let itemConversion = innerValueToConvexArray "item" inner
+      -- We can check `isFallible` by looking for `Value::try_from` or `?` in the conversion.
+      isFallible = "?" `isInfixOf` itemConversion || "Value::try_from" `isInfixOf` itemConversion || "to_convex_value" `isInfixOf` itemConversion
+   in if isFallible
+        then "Value::Array(" ++ varName ++ ".iter().map(|item| " ++ itemConversion ++ ").collect::<Result<Vec<_>, _>>()?)"
+        else "Value::Array(" ++ varName ++ ".iter().map(|item| " ++ itemConversion ++ ").collect())"
+innerValueToConvexOptional varName (Schema.VObject _) =
+  varName ++ ".to_convex_value()"
+innerValueToConvexOptional varName t
+  | isComplexForBTreeMap t = "Value::try_from(serde_json::to_value(" ++ toClonedValue varName t ++ ").unwrap_or(\"unable to serialize\".into()))?"
+  | otherwise = "Value::from(" ++ toClonedValue varName t ++ ")"
+
+innerValueToConvexArray :: String -> Schema.ConvexType -> String
+innerValueToConvexArray varName (Schema.VArray inner) =
+  let itemConversion = innerValueToConvexArray "item" inner
+      isFallible = "?" `isInfixOf` itemConversion || "Value::try_from" `isInfixOf` itemConversion || "to_convex_value" `isInfixOf` itemConversion
+   in if isFallible
+        then "Value::Array(" ++ varName ++ ".iter().map(|item| " ++ itemConversion ++ ").collect::<Result<Vec<_>, _>>()?)"
+        else "Value::Array(" ++ varName ++ ".iter().map(|item| " ++ itemConversion ++ ").collect())"
+innerValueToConvexArray varName (Schema.VObject _) =
+  varName ++ ".to_convex_value()"
+innerValueToConvexArray varName t
+  | isComplexForBTreeMap t = "Value::try_from(serde_json::to_value(" ++ toClonedValue varName t ++ ").unwrap_or(\"unable to serialize\".into()))"
+  | otherwise = "Value::from(" ++ toClonedValue varName t ++ ")"
+
+innerValueToConvexNonOptional :: String -> Schema.ConvexType -> String
+innerValueToConvexNonOptional varName (Schema.VArray inner) =
+  let itemConversion = innerValueToConvexArray "item" inner
+      isFallible = "?" `isInfixOf` itemConversion || "Value::try_from" `isInfixOf` itemConversion || "to_convex_value" `isInfixOf` itemConversion
+   in if isFallible
+        then "Value::Array(" ++ varName ++ ".iter().map(|item| " ++ itemConversion ++ ").collect::<Result<Vec<_>, _>>()?)"
+        else "Value::Array(" ++ varName ++ ".iter().map(|item| " ++ itemConversion ++ ").collect())"
+innerValueToConvexNonOptional varName (Schema.VObject _) =
+  varName ++ ".to_convex_value()?"
+innerValueToConvexNonOptional varName t
+  | isComplexForBTreeMap t = "Value::try_from(serde_json::to_value(" ++ toClonedValue varName t ++ ").unwrap_or(\"unable to serialize\".into()))?"
+  | otherwise = "Value::from(" ++ toClonedValueNonOptional varName t ++ ")"
+
+toClonedValueNonOptional :: String -> Schema.ConvexType -> String
+toClonedValueNonOptional varName (Schema.VString) = varName ++ ".to_string()"
+toClonedValueNonOptional varName t
+  | isPassedByCopy t = varName
+  | otherwise = varName ++ ".clone()"
+
+isComplexForBTreeMap :: Schema.ConvexType -> Bool
+isComplexForBTreeMap (Schema.VUnion _) = True
+isComplexForBTreeMap (Schema.VReference _) = True
+isComplexForBTreeMap Schema.VAny = True
+isComplexForBTreeMap _ = False
+
 toRustType :: String -> Schema.ConvexType -> (String, [String])
 toRustType nameHint typ = case typ of
   Schema.VString -> ("String", [])
   Schema.VNumber -> ("f64", [])
-  Schema.VBoolean -> ("bool", [])
   Schema.VInt64 -> ("i64", [])
   Schema.VFloat64 -> ("f64", [])
+  Schema.VBoolean -> ("bool", [])
   Schema.VAny -> ("serde_json::Value", [])
-  Schema.VBytes -> ("Vec<u8>", [])
   Schema.VNull -> ("()", [])
   Schema.VId t -> ("Id<types::" ++ toPascalCase t ++ "Doc>", [])
+  Schema.VBytes -> ("Vec<u8>", [])
   Schema.VArray inner ->
     let (innerType, nested) = toRustType nameHint inner
      in ("Vec<" ++ innerType ++ ">", nested)
@@ -481,12 +571,15 @@ toRustType nameHint typ = case typ of
   Schema.VObject fields ->
     let className = toPascalCase nameHint ++ "Object"
         (fieldLines, nestedFields) = unzip $ map (generateField nameHint) (map (\(n, t) -> Schema.Field n t) fields)
+        implBlock = generateToConvexValueImpl ("types::" ++ className) fields
         newModel =
           unlines
             [ indent 1 "#[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq)]",
               indent 1 ("pub struct " ++ className ++ " {"),
               unlines fieldLines,
-              indent 1 "}"
+              indent 1 "}",
+              "",
+              implBlock
             ]
      in ("types::" ++ className, concat nestedFields ++ [newModel])
   Schema.VUnion types ->
@@ -499,7 +592,7 @@ toRustType nameHint typ = case typ of
           _ ->
             if all Schema.isLiteral nonNullTypes && not (null nonNullTypes)
               then
-                let enumName = toPascalCase nameHint ++ "Enum"
+                let enumName = toPascalCase nameHint
                     variantNames = map Schema.getLiteralString nonNullTypes
                     buildVariantLines [] = []
                     buildVariantLines (first : rest) =
@@ -514,7 +607,7 @@ toRustType nameHint typ = case typ of
                         ]
                  in ("types::" ++ enumName, [newEnum])
               else ("serde_json::Value", []) -- Fallback for complex unions
-  Schema.VLiteral _s -> (toPascalCase nameHint, [])
+  Schema.VLiteral _ -> (toPascalCase nameHint, [])
   Schema.VReference n -> ("types::" ++ toPascalCase n, [])
   Schema.VVoid -> ("()", [])
 
