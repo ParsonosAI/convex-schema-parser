@@ -257,6 +257,37 @@ expectedOptionalArrayOfObjects =
           }
     }
 
+sampleArrayOfPrimitives :: String
+sampleArrayOfPrimitives =
+  unlines
+    [ "import { v, defineSchema, defineTable } from \"convex/server\"",
+      "export default defineSchema({",
+      "  analytics: defineTable({",
+      "    summary: v.array(v.number()),",
+      "    length: v.number(),",
+      "  })",
+      "})"
+    ]
+
+expectedArrayOfPrimitives :: Schema.ParsedFile
+expectedArrayOfPrimitives =
+  Schema.ParsedFile
+    { Schema.parsedConstants = Map.empty,
+      Schema.parsedSchema =
+        Schema.Schema
+          { Schema.getTables =
+              [ Schema.Table
+                  { Schema.tableName = "analytics",
+                    Schema.tableFields =
+                      [ Schema.Field "summary" (Schema.VArray Schema.VNumber),
+                        Schema.Field "length" Schema.VNumber
+                      ],
+                    Schema.tableIndexes = []
+                  }
+              ]
+          }
+    }
+
 -- Main test suite combining all cases.
 tests :: Test
 tests =
@@ -266,5 +297,6 @@ tests =
         runSchemaTest "parses schema defined before its constants" sampleSchemaAtTop expectedSchemaAtTop,
         runSchemaTest "parses table defined with an object reference" sampleSchemaWithObjectRef expectedSchemaWithObjectRef,
         runSchemaTest "parses complex schema without semicolons" sampleComplexNoSemicolons expectedComplexNoSemicolons,
-        runSchemaTest "parses optional array of objects" sampleOptionalArrayOfObjects expectedOptionalArrayOfObjects
+        runSchemaTest "parses optional array of objects" sampleOptionalArrayOfObjects expectedOptionalArrayOfObjects,
+        runSchemaTest "parses array of primitives" sampleArrayOfPrimitives expectedArrayOfPrimitives
       ]

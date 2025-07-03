@@ -2,7 +2,6 @@
 
 module Backend.Rust
   ( generateRustCode,
-    generateApiClass,
   )
 where
 

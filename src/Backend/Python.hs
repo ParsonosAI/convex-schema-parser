@@ -8,6 +8,7 @@ import qualified Convex.Schema.Parser as Schema
 import Data.Char (isUpper, toLower, toUpper)
 import Data.List (intercalate, isPrefixOf, nub)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (catMaybes)
 import PathTree
 
 -- Helper function to prepend a given number of spaces (4 per level).
@@ -37,7 +38,7 @@ generateHeader =
     [ "from typing import Any, Generic, Iterator, Literal, TypeVar",
       "",
       "from convex import ConvexClient",
-      "from pydantic import BaseModel, TypeAdapter, ValidationError",
+      "from pydantic import BaseModel, Field, TypeAdapter, ValidationError",
       "from pydantic_core import core_schema",
       "",
       "",
@@ -70,13 +71,17 @@ generateAllTables (Schema.Schema tables) =
 generateTable :: Schema.Table -> (String, [String])
 generateTable table =
   let className = toClassName (Schema.tableName table)
-      (fieldLines, nestedModelsFromFields) = unzip $ map (generateField className) (Schema.tableFields table)
+      idField = Schema.Field "_id" (Schema.VId (Schema.tableName table))
+      creationTimeField = Schema.Field "_creationTime" Schema.VNumber
+      allFields = [idField, creationTimeField] ++ Schema.tableFields table
+      (fieldLines, nestedModelsFromFields) = unzip $ map (generateField className) allFields
       tableCode =
         unlines
           [ "class " ++ className ++ "(BaseModel):",
-            indent 1 ("_id: Id['" ++ className ++ "']"),
-            indent 1 "_creationTime: float",
-            unlines fieldLines
+            unlines fieldLines,
+            "",
+            indent 1 "class Config:",
+            indent 2 "populate_by_name: bool = True"
           ]
    in (tableCode, concat nestedModelsFromFields)
 
@@ -158,7 +163,6 @@ generateSubscriptionFunction level func =
       finalReturnHint = "Iterator[" ++ returnHint ++ "]"
       fullFuncPath = "\"" ++ Action.funcPath func ++ ":" ++ funcName ++ "\""
 
-      -- We create a TypeAdapter for ALL subscription functions, this also handles primitive types.
       adapterCreation = indent (level + 1) ("adapter = TypeAdapter(" ++ returnHint ++ ")")
       validationLogic = indent (level + 3) "validated_result = adapter.validate_python(raw_result)"
 
@@ -245,22 +249,31 @@ getReturnType funcName rt =
 -- Helper to generate a single field line for a Pydantic model.
 generateField :: String -> Schema.Field -> (String, [String])
 generateField parentClassName field =
-  let (pyType, isOpt, isArr, nested) = toPythonTypeParts (parentClassName ++ capitalize (Schema.fieldName field)) (Schema.fieldType field)
-      defaultValue = case (isOpt, isArr) of
-        (True, True) -> " = Field(default_factory=list)"
-        (True, False) -> " = None"
-        _ -> ""
-   in (indent 1 (toSnakeCase (Schema.fieldName field) ++ ": " ++ pyType ++ defaultValue), nested)
+  let originalFieldName = Schema.fieldName field
+      isSystemField = "_" `isPrefixOf` originalFieldName
+      fieldNameSnake = if isSystemField then toSnakeCase (tail originalFieldName) else toSnakeCase originalFieldName
+      (pyType, isOpt, isArr, nested) = toPythonTypeParts (parentClassName ++ capitalize originalFieldName) (Schema.fieldType field)
+
+      fieldArgs =
+        let defaultArg =
+              if isOpt
+                then if isArr then "default_factory=list" else "default=None"
+                else "..."
+            aliasArg = if isSystemField then Just ("alias=\"" ++ originalFieldName ++ "\"") else Nothing
+         in intercalate ", " (catMaybes [Just defaultArg, aliasArg])
+
+      fieldDef = fieldNameSnake ++ ": " ++ pyType ++ " = Field(" ++ fieldArgs ++ ")"
+   in (indent 1 fieldDef, nested)
 
 -- Core recursive function to generate Python types from the AST.
 toPythonTypeParts :: String -> Schema.ConvexType -> (String, Bool, Bool, [String])
 toPythonTypeParts nameHint typ = case typ of
   Schema.VString -> ("str", False, False, [])
   Schema.VNumber -> ("float", False, False, [])
-  Schema.VBoolean -> ("bool", False, False, [])
-  Schema.VBytes -> ("bytes", False, False, [])
   Schema.VInt64 -> ("int", False, False, [])
   Schema.VFloat64 -> ("float", False, False, [])
+  Schema.VBoolean -> ("bool", False, False, [])
+  Schema.VBytes -> ("bytes", False, False, [])
   Schema.VAny -> ("Any", False, False, [])
   Schema.VNull -> ("None", True, False, [])
   Schema.VId t -> ("Id['" ++ toClassName t ++ "']", False, False, [])
@@ -280,7 +293,14 @@ toPythonTypeParts nameHint typ = case typ of
   Schema.VObject fields ->
     let className = capitalize nameHint ++ "Object"
         (fieldLines, nested) = unzip $ map (generateField className) (map (\(n, t) -> Schema.Field n t) fields)
-        newModel = unlines $ ["class " ++ className ++ "(BaseModel):"] ++ fieldLines
+        newModel =
+          unlines $
+            [ "class " ++ className ++ "(BaseModel):",
+              unlines fieldLines,
+              "",
+              indent 1 "class Config:",
+              indent 2 "populate_by_name: bool = True"
+            ]
      in (className, False, False, concat nested ++ [newModel])
   Schema.VVoid -> ("None", True, False, [])
 
