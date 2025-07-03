@@ -149,6 +149,6 @@ runDev opts = do
           print err
           exitFailure
         Right config ->
-          let declarationsDir = Config.declarations_dir config
-              devOpts = Dev.DevOptions (Config.project_path config) declarationsDir config
+          let declarationsDir = Config.declarationsDir config
+              devOpts = Dev.DevOptions (Config.projectPath config) declarationsDir config
            in runDevMode config

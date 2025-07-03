@@ -1,11 +1,13 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Dev (runDevMode, DevOptions (..)) where
 
 import qualified Backend.Python as Python
 import qualified Backend.Rust as Rust
+import qualified Backend.Rust.Validator as Rust.Validator
 import qualified Config
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVar, retry, writeTVar)
@@ -13,7 +15,9 @@ import Control.DeepSeq (rnf)
 import Control.Exception
 import Control.Exception (evaluate)
 import Control.Monad (forM_, forever, when)
+import Control.Monad.IO.Class (liftIO)
 import qualified Convex.Parser as P
+import qualified Convex.Validator as Validator
 import System.Directory (doesFileExist, findExecutable)
 import System.Exit (ExitCode (..), exitFailure)
 import System.FSNotify
@@ -63,7 +67,7 @@ runDevMode config = do
     -- Keep the main thread alive.
     forever $ threadDelay 1000000
   where
-    convexPath = Config.project_path config ++ "/convex"
+    convexPath = Config.projectPath config ++ "/convex"
     showEvent (Added path _ _) = "Added: " ++ path
     showEvent (Modified path _ _) = "Modified: " ++ path
     showEvent (Removed path _ _) = "Removed: " ++ path
@@ -88,7 +92,9 @@ workerThread dirtyVar config = forever $ do
   isDirty <- atomically (readTVar dirtyVar)
   if isDirty
     then putStrLn "[Worker] Further changes detected. Restarting debounce timer."
-    else handleGenerationEvent config
+    else
+      handleGenerationEvent config `catch` \(e :: SomeException) -> do
+        putStrLn $ "[Worker] Error during generation: " ++ show e
 
 -- | Handles the logic for regenerating declarations and the clients.
 handleGenerationEvent :: Config.Config -> IO ()
@@ -97,7 +103,7 @@ handleGenerationEvent config = do
     Nothing -> putStrLn "\n[ERROR] Neither 'pnpm' nor 'npm' could be found in your system's PATH.\nPlease install one of them to use the dev watcher.\n"
     Just pm -> do
       putStrLn "[Worker] Regenerating .d.ts files..."
-      let pkgMgrCmd = (proc pm ["declarations"]) {cwd = Just $ Config.project_path config}
+      let pkgMgrCmd = (proc pm ["declarations"]) {cwd = Just $ Config.projectPath config}
       (_, _, _, pkgMgrHandle) <- createProcess pkgMgrCmd
       exitCode <- waitForProcess pkgMgrHandle
       case exitCode of
@@ -111,17 +117,29 @@ handleGenerationEvent config = do
 generateAndWriteCode :: Config.Config -> IO ()
 generateAndWriteCode config = do
   putStrLn "[Worker] Parsing schema and generating clients..."
-  projectResult <- P.parseProject (Config.project_path config ++ "/convex/schema.ts") $ Config.declarations_dir config
+  projectResult <- P.parseProject (Config.projectPath config ++ "/convex/schema.ts") $ Config.declarationsDir config
   case projectResult of
     Left err ->
       putStrLn $ "[Worker] Error parsing project: " ++ err
     Right project ->
       -- Iterate over each target defined in the config
-      forM_ (Config.targets config) $ \Config.TargetConfig {..} -> do
+      forM_ (Config.targetList config) $ \Config.TargetConfig {..} -> do
         putStrLn $ "[Worker] Generating for target: " ++ show lang
         let generatedCode = case lang of
               Config.Python -> Python.generatePythonCode project
               Config.Rust -> Rust.generateRustCode project
+
+        checkedCode <- case lang of
+          Config.Rust -> do
+            Rust.Validator.run (Rust.Validator.RustValidatorEnv (Config.rustValidationPath config)) $ do
+              Validator.setup
+              Validator.validate generatedCode >>= \case
+                Just formattedAndChecked -> do
+                  liftIO $ putStrLn "[Worker] Rust code validation successful."
+                  return formattedAndChecked
+                Nothing -> do
+                  fail "[Worker] Rust code validation failed. Check the output above."
+          _ -> return generatedCode
 
         -- Write to each output file defined for the target
         forM_ output $ \path -> do
@@ -130,11 +148,11 @@ generateAndWriteCode config = do
           case oldContentResult of
             Left err -> putStrLn $ "[Worker] Error reading existing file: " ++ show err
             Right oldContent ->
-              if generatedCode /= oldContent
+              if checkedCode /= oldContent
                 then do
                   putStrLn $ "[Worker]   -> Changes detected for " ++ path
                   putStrLn "[Worker]   -> Writing new content..."
-                  writeResult <- writeFileWithRetry path generatedCode
+                  writeResult <- writeFileWithRetry path checkedCode
                   case writeResult of
                     Left err -> putStrLn $ "[Worker] Error writing file: " ++ show err
                     Right () -> putStrLn $ "[Worker]   -> Success! Updated " ++ path

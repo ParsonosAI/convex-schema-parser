@@ -15,15 +15,20 @@ library convex-schema-parser-lib
     exposed-modules:  Convex.Schema.Parser
         , Convex.Action.Parser
         , Convex.Parser
+        , Convex.Validator
         , PathTree
         , Backend.Python
+        , Backend.Python.Validator
         , Backend.Rust
+        , Backend.Rust.Validator
     build-depends:    base
         , parsec
         , mtl
         , containers
         , filepath
         , split
+        , directory
+        , process
     hs-source-dirs:   src
     default-language: Haskell2010
 
@@ -42,7 +47,8 @@ executable convex-schema-parser
                       yaml,
                       aeson,
                       stm,
-                      deepseq
+                      deepseq,
+                      filepath
     hs-source-dirs:   app
     default-language: Haskell2010
 
