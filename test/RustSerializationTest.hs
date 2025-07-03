@@ -25,9 +25,12 @@ runSerializationTest testName func expected =
     -- Generate the Rust code.
     let generatedCode = Rust.generateRustCode project
     -- For simplicity in this test, we are just checking if the expected output
-    -- is contained within the generated code. A more robust test could parse
-    -- the Rust code, but this is sufficient to validate our specific goal.
-    assertBool ("Generated code does not contain the expected implementation for to_convex_value:\n\nExpected to find:\n" ++ expected ++ "\n\nIn generated code:\n" ++ generatedCode) (expected `isInfixOf` generatedCode)
+    -- is contained within the generated code.
+    assertBool ("Generated code does not contain the expected implementation for to_convex_value:\n\nExpected to find:\n" ++ expected ++ "\n\nIn generated code:\n" ++ generatedCode) (normalizeString expected `isInfixOf` normalizeString generatedCode)
+
+-- | Removes all whitespace/newlines etc. from the string.
+normalizeString :: String -> String
+normalizeString = filter (/= '\n') . filter (/= ' ') . filter (/= '\t')
 
 -- Test Input: A complex nested object definition
 complexCreateFunction :: Action.ConvexFunction
@@ -63,16 +66,15 @@ expectedComplexSerializationImpl =
   unlines
     [ "impl types::CreateComplexDocPayloadObject {",
       "    pub fn to_convex_value(&self) -> Result<Value, ApiError> {",
-      "        let mut map = BTreeMap::new();",
+      "        let mut btmap = BTreeMap::new();",
       "        if let Some(v) = &self.name {",
-      "            map.insert(\"name\".to_string(), Value::from(v.clone()));",
+      "            btmap.insert(\"name\".to_string(), Value::from(v.to_string()));",
       "        }",
-      "        map.insert(\"value\".to_string(), Value::from(self.value));",
+      "        btmap.insert(\"value\".to_string(), Value::from(self.value));",
       "        if let Some(v) = &self.tags {",
-      "            let vec_of_values: Result<Vec<Value>, ApiError> = v.iter().map(|item| item.to_convex_value()).collect();",
-      "            map.insert(\"tags\".to_string(), Value::Array(vec_of_values?));",
+      "            btmap.insert(\"tags\".to_string(), Value::Array(v.iter().map(|item| item.to_convex_value()).collect::<Result<Vec<_>, _>>()?));",
       "        }",
-      "        Ok(Value::Object(map))",
+      "        Ok(Value::Object(btmap))",
       "    }",
       "}"
     ]

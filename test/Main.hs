@@ -14,8 +14,8 @@ main = do
         TestList
           [ ApiParserTest.tests,
             ActionParserTest.tests,
-            SchemaParserTest.tests
-            -- RustSerializationTest.tests
+            SchemaParserTest.tests,
+            RustSerializationTest.tests
           ]
 
   -- Run the combined test suite
