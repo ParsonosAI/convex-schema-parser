@@ -399,9 +399,10 @@ generateBTreeMap [] = indent 2 "let btmap = BTreeMap::new();"
 generateBTreeMap btmap =
   let buildStmts (name, convexType) =
         let varName = toSnakeCase name
-         in if isObject convexType
-              then indent 1 ("btmap.insert(\"" ++ name ++ "\".to_string(), " ++ varName ++ ".to_convex_value()?);")
-              else indent 1 ("btmap.insert(\"" ++ name ++ "\".to_string(), " ++ fieldToConvexValue (varName, convexType) ++ ");")
+         in case convexType of
+              Schema.VObject _ -> indent 1 ("btmap.insert(\"" ++ name ++ "\".to_string(), " ++ varName ++ ".to_convex_value()?);")
+              Schema.VOptional _ -> indent 1 ("if let Some(v) = " ++ varName ++ " { btmap.insert(\"" ++ name ++ "\".to_string(), " ++ fieldToConvexValue ("v", convexType) ++ "); }")
+              _ -> indent 1 ("btmap.insert(\"" ++ name ++ "\".to_string(), " ++ fieldToConvexValue (varName, convexType) ++ ");")
    in unlines
         [ indent 2 "let mut btmap = BTreeMap::new();",
           unlines $ map buildStmts btmap
@@ -410,12 +411,8 @@ generateBTreeMap btmap =
 fieldToConvexValue :: (String, Schema.ConvexType) -> String
 fieldToConvexValue (fieldName, t) =
   let fieldNameSnake = toSnakeCase fieldName
-      valueExpr = innerValueToConvexOptional fieldNameSnake t
+      valueExpr = innerValueToConvexNonOptional fieldNameSnake t
    in valueExpr
-
-isObject :: Schema.ConvexType -> Bool
-isObject (Schema.VObject _) = True
-isObject _ = False
 
 toClonedValue :: String -> Schema.ConvexType -> String
 toClonedValue varName (Schema.VString) = varName ++ ".to_string()"
@@ -426,6 +423,7 @@ toClonedValue varName t
 isPassedByCopy :: Schema.ConvexType -> Bool
 isPassedByCopy Schema.VNumber = True
 isPassedByCopy Schema.VInt64 = True
+isPassedByCopy Schema.VFloat64 = True
 isPassedByCopy Schema.VBoolean = True
 isPassedByCopy _ = False
 
@@ -532,8 +530,8 @@ innerValueToConvexNonOptional varName (Schema.VArray inner) =
    in if isFallible
         then "Value::Array(" ++ varName ++ ".iter().map(|item| " ++ itemConversion ++ ").collect::<Result<Vec<_>, _>>()?)"
         else "Value::Array(" ++ varName ++ ".iter().map(|item| " ++ itemConversion ++ ").collect())"
-innerValueToConvexNonOptional varName (Schema.VObject _) =
-  varName ++ ".to_convex_value()?"
+innerValueToConvexNonOptional varName (Schema.VBytes) = "Value::from(" ++ varName ++ ".to_vec())"
+innerValueToConvexNonOptional varName (Schema.VObject _) = "Value::from(" ++ varName ++ ".to_convex_value()?)"
 innerValueToConvexNonOptional varName t
   | isComplexForBTreeMap t = "Value::try_from(serde_json::to_value(" ++ toClonedValue varName t ++ ").unwrap_or(\"unable to serialize\".into()))?"
   | otherwise = "Value::from(" ++ toClonedValueNonOptional varName t ++ ")"
