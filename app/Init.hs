@@ -7,11 +7,15 @@ defaultConfig =
       "",
       "# (Required) The absolute path to the root of your Convex project.",
       "# This is the directory that contains the `convex/` folder and `package.json`.",
-      "# ABSOLUTE: SO no `~`/`$HOME`, etc.",
+      "# NOTE: The parser expands `~` and `$HOME` environment variables.",
       "project_path: \"/path/to/your/convex/project\"",
       "",
-      "# (Required) The absolute path to the generated TypeScript declarations, relative to `project_path`.",
+      "# (Required) The absolute path to the generated TypeScript declarations.",
       "declarations_dir: \"/path/to/your/tmp/declarations\"",
+      "",
+      "# (Optional) The path where validation sandbox projects will be created.",
+      "# Defaults to `~/.config/convex-schema-parser` if omitted.",
+      "validation_path: \"~/.config/convex-schema-parser\"",
       "",
       "# (Required) A list of generation targets. You can have one or more.",
       "targets:",
@@ -19,12 +23,12 @@ defaultConfig =
       "  - lang: Rust",
       "    # A list of one or more output files for this target.",
       "    output:",
-      "      - ../my-rust-app/src/convex_api.rs",
+      "      - /path/to/my-rust-app/src/convex_api.rs",
       "",
       "  # Example 2: Generate a Python client for data scripts.",
       "  - lang: Python",
       "    output:",
-      "      - ../scripts/lib/convex_client.py"
+      "      - /path/to/scripts/lib/convex_client.py"
     ]
 
 -- | Creates a default configuration file at the specified path.

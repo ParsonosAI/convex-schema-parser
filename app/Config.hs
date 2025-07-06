@@ -43,7 +43,7 @@ data ConfigRead = ConfigRead
   { project_path :: FilePath,
     declarations_dir :: FilePath,
     targets :: [TargetConfig],
-    rust_validation_path :: Maybe (FilePath)
+    validation_path :: Maybe (FilePath)
   }
   deriving (Show, Generic)
 
@@ -53,7 +53,7 @@ data Config = Config
   { projectPath :: FilePath,
     declarationsDir :: FilePath,
     targetList :: [TargetConfig],
-    rustValidationPath :: FilePath
+    validationPath :: FilePath
   }
   deriving (Show, Generic)
 
@@ -68,7 +68,7 @@ loadConfig p = do
           <$> (expandFullPath $ project_path config)
           <*> (expandFullPath $ declarations_dir config)
           <*> (mapM expandInTargetConfig (targets config))
-          <*> (expandFullPath $ maybe "~/.config/convex-schema-parser/rust_validation_project" id (rust_validation_path config))
+          <*> (expandFullPath $ maybe "~/.config/convex-schema-parser" id (validation_path config))
       return $ Right cfg
     Left v -> return (Left v :: Either ParseException Config)
   return r'

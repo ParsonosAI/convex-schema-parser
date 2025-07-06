@@ -142,9 +142,9 @@ generateAndWriteCode config = do
 
         checkedCode <- case lang of
           Config.Rust -> do
-            Rust.Validator.run (Rust.Validator.RustValidatorEnv (Config.rustValidationPath config)) validatorAction
+            Rust.Validator.run (Rust.Validator.RustValidatorEnv (Config.validationPath config ++ "/rust_validation_project")) validatorAction
           Config.Python -> do
-            -- Python.Validator.run (Python.Validator.PythonValidatorEnv (Config.projectPath config)) validatorAction
+            -- Python.Validator.run (Python.Validator.PythonValidatorEnv (Config.projectPath config ++ "/python_validation_project")) validatorAction
             return generatedCode
 
         -- Write to each output file defined for the target

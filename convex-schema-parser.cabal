@@ -1,11 +1,37 @@
 cabal-version:   3.0
 name:            convex-schema-parser
-version:         0.1.0.0
-license:         NONE
+version:         0.1.2
+license:         MIT
 author:          Norbert Dzikowski
 maintainer:      lambdax.one@icloud.com
+copyright:       (c) 2025 Parsonos Corporation
 build-type:      Simple
-extra-doc-files: CHANGELOG.md
+extra-doc-files: CHANGELOG.md, README.md
+
+synopsis:        A type-safe client generator for Convex for both Rust and Python.
+description:
+    `convex-schema-parser` is a command-line tool designed to parse
+    your Convex project's schema and function definitions, generating
+    strongly-typed API clients for both Rust and Python.
+    .
+    It offers two primary modes of operation:
+    .
+    1. A one-shot `generate` command for manual client generation.
+    2. A persistent `dev` mode that watches your Convex project for changes
+       and automatically regenerates your clients, providing a seamless
+       development experience.
+    .
+    The tool is designed to be easy to use, with a simple `init` command to
+    get started and a flexible YAML configuration for the development watcher.
+category:        Development, Code Generation, Web
+homepage:        https://github.com/parsonosai/convex-schema-parser
+bug-reports:     https://github.com/parsonosai/convex-schema-parser/issues
+
+tested-with:     GHC == 9.10.1
+
+source-repository head
+    type:     git
+    location: https://github.com/parsonosai/convex-schema-parser.git
 
 common warnings
     ghc-options: -Wall
