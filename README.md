@@ -147,11 +147,14 @@ The `dev` mode is driven by a YAML configuration file. This file allows you to d
 
 # (Required) The absolute path to the root of your Convex project.
 # This is the directory that contains the `convex/` folder and `package.json`.
-# ABSOLUTE: SO no `~`/`$HOME`, etc.
 project_path: /path/to/your/convex/project
 
 # (Required) The absolute path to the generated TypeScript declarations, relative to `project_path`.
 declarations_dir: /path/to/your/tmp/declarations
+
+# (Optional) The path where validation sandbox projects will be created.
+# Defaults to `~/.config/convex-schema-parser` if omitted.
+validation_path: "~/.config/convex-schema-parser"
 
 # (Required) A list of generation targets. You can have one or more.
 targets:
@@ -172,6 +175,7 @@ targets:
 
 * `project_path`: The absolute path to your Convex project root directory. This directory should contain the `convex/` folder and a `package.json` file.
 * `declarations_dir`: The absolute path to the directory where your TypeScript declaration files (`.d.ts`) are generated. This should be the output directory specified in your `tsconfig.declarations.json`.
+* `validation_path`: (Optional) The path where validation sandbox projects will be created. If omitted, defaults to `~/.config/convex-schema-parser`.
 * `targets`: A opt-level key holding a list `[]` of target configurations.
 * `lang`: The target language for the client. **Must** be `Python` or `Rust`.
 * `output`: A list `[]` of file paths where the generated client code will be written. Each target can have multiple output paths.
