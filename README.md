@@ -201,9 +201,7 @@ deployment_url = os.environ.get("CONVEX_URL")
 client = ConvexClient(deployment_url)
 
 # 2. Instantiate your generated API, wrapping the client.
-# The `set_admin_auth` method is used here to set the admin key for subsequent calls.
-# This key is required for calling internal functions.
-auth_key = get_auth_key()  # Replace with your method to get the auth key if required
+auth_key = get_auth_key()  # Replace with your method to get the auth/api/jwt key if required
 client.set_auth(auth_key)
 
 api = convex_api.API(client)
@@ -269,7 +267,7 @@ use anyhow::Result;
 async fn main() -> anyhow::Result<()> {
     // 1. Instantiate and authenticate the official ConvexClient.
     let convex_url = std::env::var("CONVEX_URL")?;
-    let auth_key = get_auth_key(); // Replace with your method to get the auth key if required
+    let auth_key = get_auth_key(); // Replace with your method to get the auth/api/jwt key if required
     
     let mut convex_client = ConvexClient::new(&convex_url).await?;
     convex_client.set_auth(&auth_key);
