@@ -1,6 +1,6 @@
 cabal-version:   3.0
 name:            convex-schema-parser
-version:         0.1.2
+version:         0.1.3
 license:         MIT
 author:          Norbert Dzikowski
 maintainer:      lambdax.one@icloud.com
