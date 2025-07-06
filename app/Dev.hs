@@ -6,6 +6,7 @@
 module Dev (runDevMode, DevOptions (..)) where
 
 import qualified Backend.Python as Python
+import qualified Backend.Python.Validator as Python.Validator
 import qualified Backend.Rust as Rust
 import qualified Backend.Rust.Validator as Rust.Validator
 import qualified Config
@@ -15,7 +16,7 @@ import Control.DeepSeq (rnf)
 import Control.Exception
 import Control.Exception (evaluate)
 import Control.Monad (forM_, forever, when)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import qualified Convex.Parser as P
 import qualified Convex.Validator as Validator
 import System.Directory (doesFileExist, findExecutable)
@@ -129,9 +130,8 @@ generateAndWriteCode config = do
               Config.Python -> Python.generatePythonCode project
               Config.Rust -> Rust.generateRustCode project
 
-        checkedCode <- case lang of
-          Config.Rust -> do
-            Rust.Validator.run (Rust.Validator.RustValidatorEnv (Config.rustValidationPath config)) $ do
+        let validatorAction :: (MonadFail m, MonadIO m, Validator.Validator m) => m String
+            validatorAction = do
               Validator.setup
               Validator.validate generatedCode >>= \case
                 Just formattedAndChecked -> do
@@ -139,7 +139,13 @@ generateAndWriteCode config = do
                   return formattedAndChecked
                 Nothing -> do
                   fail "[Worker] Rust code validation failed. Check the output above."
-          _ -> return generatedCode
+
+        checkedCode <- case lang of
+          Config.Rust -> do
+            Rust.Validator.run (Rust.Validator.RustValidatorEnv (Config.rustValidationPath config)) validatorAction
+          Config.Python -> do
+            -- Python.Validator.run (Python.Validator.PythonValidatorEnv (Config.projectPath config)) validatorAction
+            return generatedCode
 
         -- Write to each output file defined for the target
         forM_ output $ \path -> do
