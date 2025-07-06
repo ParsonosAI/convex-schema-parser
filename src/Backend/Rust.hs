@@ -44,13 +44,13 @@ generateRustModuleContent :: P.ParsedProject -> String
 generateRustModuleContent project =
   let (apiClassCode, nestedFromFuncs) = generateApiClass (P.ppFunctions project)
    in unlines
-        [ "use convex::{ConvexClient, ConvexError, FunctionResult, Value};",
+        [ "use convex::{ConvexClient, FunctionResult, Value};",
+          "use futures_util::stream::Stream;",
           "use serde::{Deserialize, Deserializer, Serialize, Serializer};",
           "use serde_json;",
           "use std::collections::BTreeMap;",
           "use std::fmt::{self, Display};",
           "use std::marker::PhantomData;",
-          "use futures_util::stream::{Stream, StreamExt};",
           "use std::pin::Pin;",
           "use std::task::{Context, Poll};",
           "",
@@ -531,7 +531,7 @@ generateBTreeMap btmap =
         let varName = toSnakeCase name
          in case convexType of
               Schema.VObject _ -> indent 1 ("btmap.insert(\"" ++ name ++ "\".to_string(), " ++ varName ++ ".to_convex_value()?);")
-              Schema.VOptional _ -> indent 1 ("if let Some(v) = " ++ varName ++ " { btmap.insert(\"" ++ name ++ "\".to_string(), " ++ fieldToConvexValue ("v", convexType) ++ "); }")
+              Schema.VOptional innerConvexType -> indent 1 ("if let Some(v) = " ++ varName ++ " { btmap.insert(\"" ++ name ++ "\".to_string(), " ++ fieldToConvexValue ("v", innerConvexType) ++ "); }")
               _ -> indent 1 ("btmap.insert(\"" ++ name ++ "\".to_string(), " ++ fieldToConvexValue (varName, convexType) ++ ");")
    in unlines
         [ indent 2 "let mut btmap = BTreeMap::new();",
