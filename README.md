@@ -14,6 +14,10 @@ It offers two primary modes of operation:
 ## Installation
 
 The easiest way to use `convex-schema-parser` is currently through the Cabal package manager.
+
+> [!NOTE]
+> We are on hackage now! So you can simply run `cabal install convex-schema-parser` to install the tool quickly without cloning.
+
 We provide prebuilt binaries for `linux` & `macOS` that you can download and run directly, but `macOS` users have to allow the binary to run first since we do not sign it (yet).
 A `npm` package `@parsonosai/convex-schema-parser` is also on its way and supported as soon as we get code-signing ready, we currently use a placeholder.
 
