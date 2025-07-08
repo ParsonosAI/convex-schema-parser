@@ -452,6 +452,13 @@ generateTableStruct :: Schema.Table -> (String, [String])
 generateTableStruct table =
   let className = toPascalCase (Schema.tableName table) ++ "Doc"
       (fieldLines, nestedFromFields) = unzip $ map (generateField className) (Schema.tableFields table)
+      allFields =
+        [ ("_id", Schema.VId (toPascalCase (Schema.tableName table))),
+          ("_creation_time", Schema.VFloat64)
+        ]
+          ++ map (\f -> (Schema.fieldName f, Schema.fieldType f)) (Schema.tableFields table)
+      fromBlock = generateFromConvexValueImpl (className) allFields
+      toBlock = generateToConvexValueImpl (className) allFields
    in ( unlines
           [ "#[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq)]",
             ("pub struct " ++ className ++ " {"),
@@ -459,9 +466,13 @@ generateTableStruct table =
             indent 1 ("pub _id: Id<" ++ className ++ ">,"),
             indent 1 "#[serde(default)]",
             indent 1 "#[serde(rename = \"_creationTime\")]",
-            indent 1 "pub creation_time: f64,",
+            indent 1 "pub _creation_time: f64,",
             unlines fieldLines,
-            "}"
+            "}",
+            "",
+            fromBlock,
+            "",
+            toBlock
           ],
         concat nestedFromFields
       )
@@ -723,7 +734,7 @@ generateAccessorFnFromConvexValue structName (fieldName, Schema.VOptional fieldT
       getterName = "get_" ++ fieldNameSnake
       (fieldTypeStr, _) = case stripPrefix (reverse "Object") (reverse structName) of
         Just cleanStructName -> toRustType (reverse cleanStructName ++ capitalize fieldName) fieldType
-        Nothing -> error "Expected struct name to end with 'Object' for optional field"
+        Nothing -> toRustType (structName ++ capitalize fieldName) fieldType
    in unlines
         [ indent 0 $ "fn " ++ getterName ++ "(map: &BTreeMap<String, Value>, key: &str) -> Result<Option<" ++ fieldTypeStr ++ ">, ApiError> {",
           indent 1 $ "match map.get(key) {",
@@ -740,7 +751,7 @@ generateAccessorFnFromConvexValue structName (fieldName, fieldType) =
       getterName = "get_" ++ fieldNameSnake
       (fieldTypeStr, _) = case stripPrefix (reverse "Object") (reverse structName) of
         Just cleanStructName -> toRustType (reverse cleanStructName ++ capitalize fieldName) fieldType
-        Nothing -> error "Expected struct name to end with 'Object' for optional field"
+        Nothing -> toRustType (structName ++ capitalize fieldName) fieldType
    in unlines
         [ indent 0 $ "fn " ++ getterName ++ "(map: &BTreeMap<String, Value>, key: &str) -> Result<" ++ fieldTypeStr ++ ", ApiError> {",
           indent 1 $ "match map.get(key) {",

@@ -3,9 +3,64 @@
 module ActionParserTest (tests) where
 
 import qualified Convex.Action.Parser as Action
+import qualified Convex.Parser as Parser
 import qualified Convex.Schema.Parser as Schema
+import qualified Data.Map as Map
 import Test.HUnit
 import Text.Parsec (runParserT)
+
+-- A dedicated test runner for unification tests that first parses a schema.
+runSchemaUnificationTest ::
+  String ->
+  String ->
+  String ->
+  [Action.ConvexFunction] ->
+  Test
+runSchemaUnificationTest testName schemaString actionString expected =
+  testName ~: TestCase $ do
+    -- First, parse the schema to get the constants.
+    schemaResult <- Schema.parseSchema schemaString
+    case schemaResult of
+      Left err -> assertFailure ("Schema parser failed: " ++ show err)
+      Right parsedSchemaFile -> do
+        let initialState = Schema.ParserState {Schema.psConstants = Schema.parsedConstants parsedSchemaFile}
+        -- Now, parse the action file with the constants from the schema.
+        actionResult <- runParserT (Action.parseActionFile "testPath") initialState "(test)" actionString
+        case actionResult of
+          Left err -> assertFailure ("Action parser failed: " ++ show err)
+          Right funcs ->
+            let project =
+                  Parser.ParsedProject
+                    { Parser.ppSchema = Schema.parsedSchema parsedSchemaFile,
+                      Parser.ppConstants = Schema.parsedConstants parsedSchemaFile,
+                      Parser.ppFunctions = funcs
+                    }
+                unifiedProject = Parser.runUnificationPass project
+             in Parser.ppFunctions unifiedProject @?= expected
+
+-- A dedicated test runner for unification tests.
+runUnificationTest ::
+  String ->
+  String ->
+  Map.Map String Schema.ConvexType ->
+  String ->
+  [Action.ConvexFunction] ->
+  Test
+runUnificationTest testName path constants input expected =
+  testName ~: TestCase $ do
+    let initialState = Schema.ParserState {Schema.psConstants = constants}
+    result <- runParserT (Action.parseActionFile path) initialState "(test)" input
+    case result of
+      Left err -> assertFailure ("Parser failed: " ++ show err)
+      Right funcs ->
+        let project =
+              Parser.ParsedProject
+                { Parser.ppSchema = Schema.Schema {Schema.getTables = []},
+                  Parser.ppConstants = constants,
+                  Parser.ppFunctions = funcs
+                }
+            unifiedProject = Parser.runUnificationPass project
+         in Parser.ppFunctions unifiedProject @?= expected
 
 tests :: Test
 tests =
@@ -18,7 +73,18 @@ tests =
         runActionTest "parses internal action with external type as VAny" "functions/stripe" sampleStripeSubscriptionAction expectedStripeSubscriptionAction,
         runActionTest "parses public action with external type" "functions/stripe" sampleStripeCheckoutAction sampleStripeCheckoutActionExpected,
         runActionTest "parses public action with external type as VAny" "functions/stripe" sampleStripeSubscriptionActionPublic expectedStripeSubscriptionActionPublic,
-        runActionTest "parses createAsset mutation with complex args" "functions/assets" sampleCreateAssetAction expectedCreateAssetAction
+        runActionTest "parses createAsset mutation with complex args" "functions/assets" sampleCreateAssetAction expectedCreateAssetAction,
+        runUnificationTest
+          "unifies function return with named doc"
+          "functions/users"
+          userProfileConstants
+          sampleGetUserAction
+          expectedGetUserAction,
+        runSchemaUnificationTest
+          "unifies function return with table doc"
+          sampleSchemaWithUserTable
+          sampleGetUserTableAction
+          expectedGetUserTableAction
       ]
   where
     runActionTest testName path input expected =
@@ -204,5 +270,141 @@ expectedCreateAssetAction =
             )
           ],
         Action.funcReturn = Schema.VId "assets"
+      }
+  ]
+
+-- Test case for structural unification of a function's return type.
+userProfileConstants :: Map.Map String Schema.ConvexType
+userProfileConstants =
+  Map.fromList
+    [ ("UserProfile", userProfileType),
+      ("Address", addressType)
+    ]
+  where
+    addressType =
+      Schema.VObject
+        [ ("street", Schema.VString),
+          ("city", Schema.VString)
+        ]
+    userProfileType =
+      Schema.VObject
+        [ ("name", Schema.VString),
+          ("address", Schema.VReference "Address")
+        ]
+
+sampleGetUserAction :: String
+sampleGetUserAction =
+  unlines
+    [ "export declare const getUser: import(\"convex/server\").RegisteredQuery<\"public\", {}, Promise<{",
+      "  name: string;",
+      "  address: {",
+      "    street: string;",
+      "    city: string;",
+      "  };",
+      "}>>;"
+    ]
+
+expectedGetUserAction :: [Action.ConvexFunction]
+expectedGetUserAction =
+  [ Action.ConvexFunction
+      { Action.funcName = "getUser",
+        Action.funcPath = "functions/users",
+        Action.funcType = Action.Query,
+        Action.funcArgs = [],
+        Action.funcReturn = Schema.VReference "UserProfile" -- Should be unified
+      }
+  ]
+
+-- Test case for unification against a table doc.
+sampleSchemaWithUserTable :: String
+sampleSchemaWithUserTable =
+  unlines
+    [ "import { defineSchema, defineTable } from \"convex/server\";",
+      "import { v } from \"convex/values\";",
+      "",
+      "export default defineSchema({",
+      "  users: defineTable({",
+      "    name: v.string(),",
+      "    email: v.string()",
+      "  })",
+      "});"
+    ]
+
+sampleGetUserTableAction :: String
+sampleGetUserTableAction =
+  unlines
+    [ "export declare const getUser: import(\"convex/server\").RegisteredQuery<\"public\", {}, Promise<{",
+      "  _id: import(\"convex/values\").GenericId<\"users\">;",
+      "  _creationTime: number;",
+      "  name: string;",
+      "  email: string;",
+      "}>>;"
+    ]
+
+expectedGetUserTableAction :: [Action.ConvexFunction]
+expectedGetUserTableAction =
+  [ Action.ConvexFunction
+      { Action.funcName = "getUser",
+        Action.funcPath = "testPath",
+        Action.funcType = Action.Query,
+        Action.funcArgs = [],
+        Action.funcReturn = Schema.VReference "UsersDoc" -- Should be unified
+      }
+  ]
+
+sampleSchemaWithAssetsTable :: String
+sampleSchemaWithAssetsTable =
+  unlines
+    [ "import { defineSchema, defineTable } from \"convex/server\";",
+      "import { v } from \"convex/values\";",
+      "",
+      "export default defineSchema({",
+      "  projects: defineTable({",
+      "    name: v.string()",
+      "  }),",
+      "  assets: defineTable({",
+      "    project_id: v.id(\"projects\"),",
+      "    asset_name: v.string(),",
+      "    asset_essence_mtime: v.number(),",
+      "    link_metadata: v.object({",
+      "      sample_rate: v.number(),",
+      "      summary: v.bytes(),",
+      "      length: v.number()",
+      "    })",
+      "  })",
+      "});"
+    ]
+
+sampleGetAssetsAction :: String
+sampleGetAssetsAction =
+  unlines
+    [ "export declare const getAssets: import(\"convex/server\").RegisteredQuery<\"public\", {",
+      "  project_id: import(\"convex/values\").Id<\"projects\">;",
+      "  secret: string;",
+      "}, Promise<Array<{",
+      "  _id: import(\"convex/values\").Id<\"assets\">;",
+      "  _creationTime: number;",
+      "  project_id: import(\"convex/values\").Id<\"projects\">;",
+      "  asset_name: string;",
+      "  asset_essence_mtime: number;",
+      "  link_metadata: {",
+      "    summary: Uint8Array;",
+      "    sample_rate: number;",
+      "    length: number;",
+      "  };",
+      "}>>>;"
+    ]
+
+expectedGetAssetsAction :: [Action.ConvexFunction]
+expectedGetAssetsAction =
+  [ Action.ConvexFunction
+      { Action.funcName = "getAssets",
+        Action.funcPath = "testPath",
+        Action.funcType = Action.Query,
+        Action.funcArgs =
+          [ ("project_id", Schema.VId "projects"),
+            ("secret", Schema.VString)
+          ],
+        Action.funcReturn = Schema.VArray (Schema.VReference "AssetsDoc")
       }
   ]

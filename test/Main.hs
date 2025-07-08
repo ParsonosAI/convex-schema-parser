@@ -4,6 +4,7 @@ import qualified ActionParserTest
 import qualified ApiParserTest
 import qualified RustSerializationTest
 import qualified SchemaParserTest
+import qualified UnificationTest
 import System.Exit (exitFailure, exitSuccess)
 import Test.HUnit
 
@@ -15,7 +16,8 @@ main = do
           [ ApiParserTest.tests,
             ActionParserTest.tests,
             SchemaParserTest.tests,
-            RustSerializationTest.tests
+            RustSerializationTest.tests,
+            UnificationTest.tests
           ]
 
   -- Run the combined test suite

@@ -243,6 +243,7 @@ getReturnType funcName rt =
         Schema.VObject _ -> True
         Schema.VArray (Schema.VObject _) -> True
         Schema.VReference _ -> True
+        Schema.VArray (Schema.VReference _) -> True
         _ -> False
    in (pyType, isModel, nested)
 

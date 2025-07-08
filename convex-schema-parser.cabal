@@ -75,6 +75,7 @@ test-suite test-convex-parser
         , ApiParserTest
         , SchemaParserTest
         , RustSerializationTest
+        , UnificationTest
     hs-source-dirs:      test
     build-depends:       base,
                          HUnit >=1.6.0 && < 1.7,
