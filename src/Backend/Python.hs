@@ -37,10 +37,24 @@ generateHeader =
   unlines
     [ "from typing import Any, Generic, Iterator, Literal, TypeVar",
       "",
-      "from convex import ConvexClient",
+      "from convex import ConvexClient, ConvexInt64",
       "from pydantic import BaseModel, Field, TypeAdapter, ValidationError",
       "from pydantic_core import core_schema",
       "",
+      "",
+      "class PydanticConvexInt64(ConvexInt64):",
+      "    @classmethod",
+      "    def __get_pydantic_core_schema__(cls, s, h) -> core_schema.CoreSchema:",
+      "        from_int_schema = core_schema.no_info_after_validator_function(cls, core_schema.int_schema())",
+      "",
+      "        def validate_from_instance(v):",
+      "            return PydanticConvexInt64(v.value)",
+      "",
+      "        from_instance_schema = core_schema.no_info_after_validator_function(",
+      "            validate_from_instance, core_schema.is_instance_schema(ConvexInt64)",
+      "        )",
+      "",
+      "        return core_schema.union_schema([from_instance_schema, from_int_schema])",
       "",
       "T = TypeVar('T')",
       "class Id(str, Generic[T]):",
@@ -271,7 +285,7 @@ toPythonTypeParts :: String -> Schema.ConvexType -> (String, Bool, Bool, [String
 toPythonTypeParts nameHint typ = case typ of
   Schema.VString -> ("str", False, False, [])
   Schema.VNumber -> ("float", False, False, [])
-  Schema.VInt64 -> ("int", False, False, [])
+  Schema.VInt64 -> ("PydanticConvexInt64", False, False, [])
   Schema.VFloat64 -> ("float", False, False, [])
   Schema.VBoolean -> ("bool", False, False, [])
   Schema.VBytes -> ("bytes", False, False, [])
