@@ -1021,12 +1021,16 @@ toRustType nameHint typ = case typ of
                     buildVariantLines (first : rest) =
                       (indent 2 "#[default]\n" ++ indent 2 ("#[serde(rename = \"" ++ first ++ "\")]\n") ++ indent 2 (toPascalCase first ++ ","))
                         : map (\v -> indent 2 ("#[serde(rename = \"" ++ v ++ "\")]\n") ++ indent 2 (toPascalCase v ++ ",")) rest
+                    fromBlock = generateFromConvexValueImplEnum ("types::" ++ enumName) nonNullTypes
                     newEnum =
                       unlines
                         [ indent 1 "#[derive(Default, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]",
                           indent 1 ("pub enum " ++ enumName ++ " {"),
                           unlines $ buildVariantLines variantNames,
-                          indent 1 "}"
+                          indent 1 "}",
+                          "",
+                          fromBlock,
+                          ""
                         ]
                  in ("types::" ++ enumName, [newEnum])
               else ("serde_json::Value", []) -- Fallback for complex unions
