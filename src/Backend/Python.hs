@@ -6,10 +6,35 @@ import qualified Convex.Action.Parser as Action
 import qualified Convex.Parser as P
 import qualified Convex.Schema.Parser as Schema
 import Data.Char (isUpper, toLower, toUpper)
-import Data.List (intercalate, isPrefixOf, nub)
+import Data.List (intercalate, isPrefixOf, nub, partition)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes)
+import qualified Data.Set as Set
 import PathTree
+
+-- | Represents a generated Python definition (e.g., a class or a constant).
+data Definition
+  = Definition
+  { defName :: String,
+    defDeps :: Set.Set String,
+    defCode :: String
+  }
+  deriving (Show, Eq, Ord)
+
+-- | Sorts definitions topologically based on their dependencies.
+--   A simple implementation that iteratively finds definitions with no remaining dependencies.
+topologicalSort :: [Definition] -> [Definition]
+topologicalSort defs = go defs [] (Set.fromList $ map defName defs)
+  where
+    go [] sorted _ = sorted
+    go remaining sorted definedNames =
+      let (ready, pending) = partition (\d -> Set.null (defDeps d `Set.intersection` definedNames)) remaining
+       in if null ready && not (null pending)
+            then error ("Circular dependency detected in definitions: " ++ show (map defName pending))
+            else
+              let newSorted = sorted ++ ready
+                  newDefinedNames = definedNames `Set.difference` (Set.fromList $ map defName ready)
+               in go pending newSorted newDefinedNames
 
 -- Helper function to prepend a given number of spaces (4 per level).
 indent :: Int -> String -> String
@@ -17,18 +42,17 @@ indent n s = replicate (n * 4) ' ' ++ s
 
 generatePythonCode :: P.ParsedProject -> String
 generatePythonCode project =
-  let (constantsCode, nestedModelsFromConstants) = generateAllConstants (P.ppConstants project)
-      (schemaCode, nestedFromFields) = generateAllTables (P.ppSchema project)
-      (apiClassCode, nestedFromFuncs) = generateApiClass (P.ppFunctions project)
-      allNestedCode = unlines . nub $ nestedFromFields ++ nestedModelsFromConstants ++ nestedFromFuncs
+  let constantDefs = generateAllConstants (P.ppConstants project)
+      tableDefs = generateAllTables (P.ppSchema project)
+      (apiDef, apiNestedDefs) = generateApiClass (P.ppFunctions project)
+      allDefs = nub $ constantDefs ++ tableDefs ++ apiNestedDefs ++ [apiDef]
+      sortedDefs = topologicalSort allDefs
+      definitionsCode = unlines $ map defCode sortedDefs
       aliasesCode = generateAliases (P.ppSchema project)
    in unlines
         [ generateHeader,
-          constantsCode,
-          allNestedCode,
-          schemaCode,
-          aliasesCode,
-          apiClassCode
+          definitionsCode,
+          aliasesCode
         ]
 
 -- | Generates the static header for the Python file.
@@ -65,30 +89,32 @@ generateHeader =
     ]
 
 -- | Generates Python type aliases for all the named constants.
-generateAllConstants :: Map.Map String Schema.ConvexType -> (String, [String])
+generateAllConstants :: Map.Map String Schema.ConvexType -> [Definition]
 generateAllConstants constants =
-  let results = map (generateConstant . fst) (Map.toList constants)
-   in (unlines $ map fst results, concatMap snd results)
+  concatMap (generateConstant . fst) (Map.toList constants)
   where
+    generateConstant :: String -> [Definition]
     generateConstant name =
       let constType = constants Map.! name
-          (pyType, _, _, nested) = toPythonTypeParts name constType
-       in (name ++ " = " ++ pyType, nested)
+          (pyType, _, _, nestedDefs, deps) = toPythonTypeParts name constType
+          code = name ++ " = " ++ pyType
+          definition = Definition {defName = name, defDeps = deps, defCode = code}
+       in definition : nestedDefs
 
 -- | Generates Pydantic BaseModel classes for all tables.
-generateAllTables :: Schema.Schema -> (String, [String])
+generateAllTables :: Schema.Schema -> [Definition]
 generateAllTables (Schema.Schema tables) =
-  let (tableCodes, nested) = unzip $ map generateTable tables
-   in (unlines tableCodes, concat nested)
+  let (tableDefs, nestedDefs) = unzip $ map generateTable tables
+   in tableDefs ++ concat nestedDefs
 
 -- | Generates a single Pydantic BaseModel class for a table.
-generateTable :: Schema.Table -> (String, [String])
+generateTable :: Schema.Table -> (Definition, [Definition])
 generateTable table =
   let className = toClassName (Schema.tableName table)
       idField = Schema.Field "_id" (Schema.VId (Schema.tableName table))
       creationTimeField = Schema.Field "_creationTime" Schema.VNumber
       allFields = [idField, creationTimeField] ++ Schema.tableFields table
-      (fieldLines, nestedModelsFromFields) = unzip $ map (generateField className) allFields
+      (fieldLines, nestedDefsFromFields, fieldDeps) = unzip3 $ map (generateField className) allFields
       tableCode =
         unlines
           [ "class " ++ className ++ "(BaseModel):",
@@ -97,7 +123,9 @@ generateTable table =
             indent 1 "class Config:",
             indent 2 "populate_by_name: bool = True"
           ]
-   in (tableCode, concat nestedModelsFromFields)
+      deps = Set.delete className (Set.unions fieldDeps)
+      definition = Definition {defName = className, defDeps = deps, defCode = tableCode}
+   in (definition, concat nestedDefsFromFields)
 
 -- | Generates singular type aliases for all table documents.
 generateAliases :: Schema.Schema -> String
@@ -108,12 +136,12 @@ generateAliases (Schema.Schema tables) =
     toAlias t = toSingular (Schema.tableName t) ++ " = " ++ toClassName (Schema.tableName t)
 
 -- | Generates the code for a single Python function wrapper.
-generateFunction :: Int -> Action.ConvexFunction -> (String, [String])
+generateFunction :: Int -> Action.ConvexFunction -> (String, [Definition], Set.Set String)
 generateFunction level func =
   let funcName = Action.funcName func
-      (argSignature, payloadMapping, nestedFromArgs) = generateArgSignature funcName (Action.funcArgs func)
+      (argSignature, payloadMapping, defsFromArgs, depsFromArgs) = generateArgSignature funcName (Action.funcArgs func)
       funcNameSnake = toSnakeCase funcName
-      (rawReturnHint, isModelReturn, nestedFromReturn) = getReturnType funcName (Action.funcReturn func)
+      (rawReturnHint, isModelReturn, defsFromReturn, depsFromReturn) = getReturnType funcName (Action.funcReturn func)
 
       handlerCall = case Action.funcType func of
         Action.Query -> "self._client.query"
@@ -166,14 +194,14 @@ generateFunction level func =
             indent (level + 2) ("print(f\"Error in '" ++ funcNameSnake ++ "': {e}\")"),
             indent (level + 2) "raise"
           ]
-   in (funcCode, nestedFromArgs ++ nestedFromReturn)
+   in (funcCode, defsFromArgs ++ defsFromReturn, depsFromArgs `Set.union` depsFromReturn)
 
-generateSubscriptionFunction :: Int -> Action.ConvexFunction -> (String, [String])
+generateSubscriptionFunction :: Int -> Action.ConvexFunction -> (String, [Definition], Set.Set String)
 generateSubscriptionFunction level func =
   let funcName = Action.funcName func
-      (argSignature, payloadMapping, nestedFromArgs) = generateArgSignature funcName (Action.funcArgs func)
+      (argSignature, payloadMapping, defsFromArgs, depsFromArgs) = generateArgSignature funcName (Action.funcArgs func)
       funcNameSnake = "subscribe_" ++ toSnakeCase funcName
-      (returnHint, _, nestedFromReturn) = getReturnType funcName (Action.funcReturn func)
+      (returnHint, _, defsFromReturn, depsFromReturn) = getReturnType funcName (Action.funcReturn func)
       finalReturnHint = "Iterator[" ++ returnHint ++ "]"
       fullFuncPath = "\"" ++ Action.funcPath func ++ ":" ++ funcName ++ "\""
 
@@ -195,25 +223,25 @@ generateSubscriptionFunction level func =
             indent (level + 3) "print(f\"Validation error in subscription update: {e}\")",
             indent (level + 3) "continue"
           ]
-   in (funcCode, nestedFromArgs ++ nestedFromReturn)
+   in (funcCode, defsFromArgs ++ defsFromReturn, depsFromArgs `Set.union` depsFromReturn)
 
-generateApiStructure :: Int -> PathTree -> ([String], [String], [String])
+generateApiStructure :: Int -> PathTree -> ([String], [String], [Definition], Set.Set String)
 generateApiStructure level (DirNode dir) =
-  let (inits, defs, nested) = foldl processEntry ([], [], []) (Map.toList dir)
-   in (inits, defs, nested)
+  let (inits, defs, nestedDefs, deps) = foldl processEntry ([], [], [], Set.empty) (Map.toList dir)
+   in (inits, defs, nestedDefs, deps)
   where
-    processEntry (is, ds, ns) (_name, FuncNode func) =
-      let (funcDef, nestedFromFunc) = generateFunction level func
-          (subDef, nestedFromSub) =
+    processEntry (is, ds, nds, ds_deps) (_name, FuncNode func) =
+      let (funcDef, defsFromFunc, depsFromFunc) = generateFunction level func
+          (subDef, defsFromSub, depsFromSub) =
             if Action.funcType func == Action.Query
               then generateSubscriptionFunction level func
-              else ("", [])
-       in (is, ds ++ [funcDef, subDef], ns ++ nestedFromFunc ++ nestedFromSub)
-    processEntry (is, ds, ns) (name, DirNode subDir) =
+              else ("", [], Set.empty)
+       in (is, ds ++ [funcDef, subDef], nds ++ defsFromFunc ++ defsFromSub, ds_deps `Set.union` depsFromFunc `Set.union` depsFromSub)
+    processEntry (is, ds, nds, ds_deps) (name, DirNode subDir) =
       let className = capitalize name
           attrName = toSnakeCase name
           initLine = "self." ++ attrName ++ " = self." ++ className ++ "(self._client)"
-          (subInits, subDefs, nestedFromSub) = generateApiStructure (level + 1) (DirNode subDir)
+          (subInits, subDefs, defsFromSub, depsFromSub) = generateApiStructure (level + 1) (DirNode subDir)
           classDef =
             unlines $
               [ "",
@@ -223,13 +251,13 @@ generateApiStructure level (DirNode dir) =
               ]
                 ++ map (indent (level + 2)) subInits
                 ++ subDefs
-       in (is ++ [initLine], ds ++ [classDef], ns ++ nestedFromSub)
-generateApiStructure _ (FuncNode _) = ([], [], [])
+       in (is ++ [initLine], ds ++ [classDef], nds ++ defsFromSub, ds_deps `Set.union` depsFromSub)
+generateApiStructure _ (FuncNode _) = ([], [], [], Set.empty)
 
-generateApiClass :: [Action.ConvexFunction] -> (String, [String])
+generateApiClass :: [Action.ConvexFunction] -> (Definition, [Definition])
 generateApiClass funcs =
   let tree = buildPathTree funcs
-      (initLines, definitionLines, nestedModels) = generateApiStructure 1 tree
+      (initLines, definitionLines, nestedDefs, deps) = generateApiStructure 1 tree
       header =
         [ "\n# --- API Client Class ---\n",
           "class API:",
@@ -238,36 +266,39 @@ generateApiClass funcs =
           indent 2 "self._client = client"
         ]
       body = map (indent 2) initLines ++ definitionLines
-   in (unlines (header ++ body), nub nestedModels)
+      apiCode = unlines (header ++ body)
+      apiDef = Definition {defName = "API", defDeps = deps, defCode = apiCode}
+   in (apiDef, nestedDefs)
 
 -- Helper to generate Python function arguments and the payload dictionary mapping.
-generateArgSignature :: String -> [(String, Schema.ConvexType)] -> (String, String, [String])
+generateArgSignature :: String -> [(String, Schema.ConvexType)] -> (String, String, [Definition], Set.Set String)
 generateArgSignature funcName args =
   let results = map (\(n, t) -> (n, toPythonTypeParts (capitalize funcName ++ capitalize n) t)) args
-      sigParts = map (\(n, (t, _, _, _)) -> toSnakeCase n ++ ": " ++ t) results
+      sigParts = map (\(n, (t, _, _, _, _)) -> toSnakeCase n ++ ": " ++ t) results
       payloadParts = map (\(n, _) -> "\"" ++ n ++ "\": " ++ toSnakeCase n) results
-      nestedModels = concatMap (\(_, (_, _, _, n)) -> n) results
-   in (intercalate ", " sigParts, intercalate ", " payloadParts, nestedModels)
+      nestedDefs = concatMap (\(_, (_, _, _, defs, _)) -> defs) results
+      deps = Set.unions $ map (\(_, (_, _, _, _, d)) -> d) results
+   in (intercalate ", " sigParts, intercalate ", " payloadParts, nestedDefs, deps)
 
 -- Helper to get the return type information.
-getReturnType :: String -> Schema.ConvexType -> (String, Bool, [String])
+getReturnType :: String -> Schema.ConvexType -> (String, Bool, [Definition], Set.Set String)
 getReturnType funcName rt =
-  let (pyType, _, _, nested) = toPythonTypeParts (capitalize funcName ++ "Return") rt
+  let (pyType, _, _, nestedDefs, deps) = toPythonTypeParts (capitalize funcName ++ "Return") rt
       isModel = case rt of
         Schema.VObject _ -> True
         Schema.VArray (Schema.VObject _) -> True
         Schema.VReference _ -> True
         Schema.VArray (Schema.VReference _) -> True
         _ -> False
-   in (pyType, isModel, nested)
+   in (pyType, isModel, nestedDefs, deps)
 
 -- Helper to generate a single field line for a Pydantic model.
-generateField :: String -> Schema.Field -> (String, [String])
+generateField :: String -> Schema.Field -> (String, [Definition], Set.Set String)
 generateField parentClassName field =
   let originalFieldName = Schema.fieldName field
       isSystemField = "_" `isPrefixOf` originalFieldName
       fieldNameSnake = if isSystemField then toSnakeCase (tail originalFieldName) else toSnakeCase originalFieldName
-      (pyType, isOpt, isArr, nested) = toPythonTypeParts (parentClassName ++ capitalize originalFieldName) (Schema.fieldType field)
+      (pyType, isOpt, isArr, nested, deps) = toPythonTypeParts (parentClassName ++ capitalize originalFieldName) (Schema.fieldType field)
 
       fieldArgs =
         let defaultArg =
@@ -278,37 +309,38 @@ generateField parentClassName field =
          in intercalate ", " (catMaybes [Just defaultArg, aliasArg])
 
       fieldDef = fieldNameSnake ++ ": " ++ pyType ++ " = Field(" ++ fieldArgs ++ ")"
-   in (indent 1 fieldDef, nested)
+   in (indent 1 fieldDef, nested, deps)
 
 -- Core recursive function to generate Python types from the AST.
-toPythonTypeParts :: String -> Schema.ConvexType -> (String, Bool, Bool, [String])
+toPythonTypeParts :: String -> Schema.ConvexType -> (String, Bool, Bool, [Definition], Set.Set String)
 toPythonTypeParts nameHint typ = case typ of
-  Schema.VString -> ("str", False, False, [])
-  Schema.VNumber -> ("float", False, False, [])
-  Schema.VInt64 -> ("PydanticConvexInt64", False, False, [])
-  Schema.VFloat64 -> ("float", False, False, [])
-  Schema.VBoolean -> ("bool", False, False, [])
-  Schema.VBytes -> ("bytes", False, False, [])
-  Schema.VAny -> ("Any", False, False, [])
-  Schema.VNull -> ("None", True, False, [])
-  Schema.VId t -> ("Id['" ++ toClassName t ++ "']", False, False, [])
+  Schema.VString -> ("str", False, False, [], Set.empty)
+  Schema.VNumber -> ("float", False, False, [], Set.empty)
+  Schema.VInt64 -> ("PydanticConvexInt64", False, False, [], Set.empty)
+  Schema.VFloat64 -> ("float", False, False, [], Set.empty)
+  Schema.VBoolean -> ("bool", False, False, [], Set.empty)
+  Schema.VBytes -> ("bytes", False, False, [], Set.empty)
+  Schema.VAny -> ("Any", False, False, [], Set.empty)
+  Schema.VNull -> ("None", True, False, [], Set.empty)
+  Schema.VId t -> ("Id['" ++ toClassName t ++ "']", False, False, [], Set.singleton (toClassName t))
   Schema.VArray inner ->
-    let (innerType, isOpt, isArr, nested) = toPythonTypeParts nameHint inner
-     in ("list[" ++ innerType ++ "]", isOpt, isArr, nested)
+    let (innerType, isOpt, isArr, nested, deps) = toPythonTypeParts nameHint inner
+     in ("list[" ++ innerType ++ "]", isOpt, isArr, nested, deps)
   Schema.VOptional inner ->
-    let (innerType, _, innerIsArray, nested) = toPythonTypeParts nameHint inner
-     in (innerType ++ " | None", True, innerIsArray, nested)
+    let (innerType, _, innerIsArray, nested, deps) = toPythonTypeParts nameHint inner
+     in (innerType ++ " | None", True, innerIsArray, nested, deps)
   Schema.VUnion types ->
     let results = map (toPythonTypeParts nameHint) types
-        pyTypes = nub $ map (\(t, _, _, _) -> t) results
-        nested = concatMap (\(_, _, _, n) -> n) results
-     in (intercalate " | " pyTypes, False, False, nested)
-  Schema.VLiteral s -> ("Literal[\"" ++ s ++ "\"]", False, False, [])
-  Schema.VReference n -> (n, False, False, [])
+        pyTypes = nub $ map (\(t, _, _, _, _) -> t) results
+        nested = concatMap (\(_, _, _, d, _) -> d) results
+        deps = Set.unions $ map (\(_, _, _, _, d) -> d) results
+     in (intercalate " | " pyTypes, False, False, nested, deps)
+  Schema.VLiteral s -> ("Literal[\"" ++ s ++ "\"]", False, False, [], Set.empty)
+  Schema.VReference n -> (n, False, False, [], Set.singleton n)
   Schema.VObject fields ->
     let className = capitalize nameHint ++ "Object"
-        (fieldLines, nested) = unzip $ map (generateField className) (map (\(n, t) -> Schema.Field n t) fields)
-        newModel =
+        (fieldLines, nestedDefs, fieldDeps) = unzip3 $ map (generateField className) (map (\(n, t) -> Schema.Field n t) fields)
+        newModelCode =
           unlines $
             [ "class " ++ className ++ "(BaseModel):",
               unlines fieldLines,
@@ -316,8 +348,10 @@ toPythonTypeParts nameHint typ = case typ of
               indent 1 "class Config:",
               indent 2 "populate_by_name: bool = True"
             ]
-     in (className, False, False, concat nested ++ [newModel])
-  Schema.VVoid -> ("None", True, False, [])
+        deps = Set.unions fieldDeps
+        newModelDef = Definition {defName = className, defDeps = deps, defCode = newModelCode}
+     in (className, False, False, newModelDef : concat nestedDefs, Set.singleton className)
+  Schema.VVoid -> ("None", True, False, [], Set.empty)
 
 capitalize :: String -> String
 capitalize "" = ""
