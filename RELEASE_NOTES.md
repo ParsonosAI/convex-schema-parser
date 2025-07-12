@@ -1,40 +1,38 @@
-# Release Notes: convex-schema-parser 0.1.4.0
+# Release Notes: convex-schema-parser 0.1.5.0
 
-This release introduces a fix for a bug in the unification pass of the schema parser.
+This release introduces several key improvements to the Python and Rust backends, enhancing type safety, correctness, and overall developer experience.
 
-## Fixes
+## Backend Improvements
 
-*   **Schema Parsing:**
-    *   The schema parser now properly unifies nested types during the unification pass.
+*   **Python:**
+    *   **Correct Definition Ordering:** The Python backend now analyzes the dependency graph of generated Pydantic models and constants, ensuring that all definitions are topologically sorted. This resolves previous issues where code would fail to compile due to out-of-order declarations, especially in schemas with complex, nested object types.
+    *   **Pydantic `ConvexInt64` Support:** We've added seamless integration for `ConvexInt64` within Pydantic models. This ensures that `ConvexInt64` types from your schema are correctly validated and serialized, maintaining data integrity between your Convex backend and Python client.
 
-## Example
+*   **Rust:**
+    *   **`TryFrom` for Anonymous Enums:** The Rust backend now automatically generates `TryFrom` implementations for anonymous enums (string literal unions). This provides a safe and idiomatic way to convert raw strings into their corresponding enum types, with robust error handling for invalid values.
 
-Previously, if you had a table `users` and a query that returned a user object, the generated code would not recognize the return type as a `UsersDoc`.
+## Example: Python Definition Ordering
 
-**Schema (`convex/schema.ts`):**
-```typescript
-import { defineSchema, defineTable } from "convex/server";
-import { v } from "convex/values";
+Previously, a schema with nested objects could produce invalid Python code:
 
-export default defineSchema({
-  users: defineTable({
-    name: v.string(),
-    email: v.string()
-  })
-});
+```python
+# Invalid Code: AssetValidatorObjectLink_metadataObject is used before it's defined
+class AssetValidatorObject(BaseModel):
+    link_metadata: AssetValidatorObjectLink_metadataObject = Field(...)
+    # ...
+
+class AssetValidatorObjectLink_metadataObject(BaseModel):
+    # ...
 ```
 
-**Action (`convex/myActions.ts`):**
-```typescript
-import { query } from "./_generated/server";
+With this release, the generator correctly orders the definitions:
 
-export const getUser = query({
-  handler: async (ctx) => {
-    // ... implementation returning a user document
-  },
-});
+```python
+# Correctly Ordered Code
+class AssetValidatorObjectLink_metadataObject(BaseModel):
+    # ...
+
+class AssetValidatorObject(BaseModel):
+    link_metadata: AssetValidatorObjectLink_metadataObject = Field(...)
+    # ...
 ```
-
-The parser would generate a generic object type for the return value of `getUser`.
-
-With this release, the parser now correctly unifies the return type with the `users` table schema, resulting in a `UsersDoc` type in the generated client. So no need to manually cast or construct return types to their Doc equivalents anymore.

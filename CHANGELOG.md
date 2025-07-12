@@ -1,5 +1,14 @@
 # Revision history for convex-schema-parser
 
+## 0.1.5.0 -- 2025-07-12
+
+*   **Backend Improvements:**
+    *   **Python:**
+        *   The generated Python code now correctly orders class and constant definitions based on their dependencies, resolving issues with out-of-order declarations.
+        *   Added support for `ConvexInt64` with Pydantic, ensuring proper validation and serialization.
+    *   **Rust:**
+        *   Generated `TryFrom` implementations for anonymous enums, improving type safety and ergonomics.
+
 ## 0.1.4.0 -- 2025-07-09
 
 *   **Fixes:**
@@ -41,6 +50,7 @@
         *   Normalized generated strings for easier testing.
         *   Namespaced functions to avoid conflicts in the Python and Rust backends.
         *   Fixed a bug where empty function arguments were not being properly handled in the action parser.
+        *   Properly unify nested types during the unification pass.
 
 *   **Miscellaneous:**
     *   Updated README and LICENSE.
