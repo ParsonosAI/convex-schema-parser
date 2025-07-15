@@ -13,6 +13,7 @@ module Convex.Schema.Parser
     initialState,
     getLiteralString,
     isLiteral,
+    sanitizeUnionValues,
   )
 where
 
@@ -232,6 +233,18 @@ convexTypeParser =
         "literal" -> VLiteral <$> parens stringLiteral
         _ -> fail $ "Unknown v-dot type: " ++ typeName
     referenceParser = VReference <$> identifier
+
+-- | Sanitizes union literals. It might be that a union like this is defined:
+-- export const instruction_mime_type = v.union(
+--   v.literal("application/pdf"),
+--   v.literal("text/html"),
+--   v.literal("text/plain")
+-- );
+--
+-- And `application/pdf` would be translated into a type `Application/pdf`, which
+-- is invalid in most languages. After sanitization, it would become `application_pdf`.
+sanitizeUnionValues :: String -> String
+sanitizeUnionValues = concatMap (\c -> if c `elem` ['/', '@', '\\'] then ['_'] else [c])
 
 topLevelConstParser :: SchemaParser ()
 topLevelConstParser = lexeme $ do

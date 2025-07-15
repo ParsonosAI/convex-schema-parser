@@ -105,7 +105,6 @@ sampleSchemaWithObjectRef =
       "  exchange_code: v.string(),",
       "  tenant_id: v.id(\"tenants\"),",
       "};",
-      "",
       "// A type alias, which should be parsed and stored.",
       "export type MyId = typeof v.id(\"tenants\");",
       "",
@@ -288,6 +287,56 @@ expectedArrayOfPrimitives =
           }
     }
 
+-- Test Case for sanitizing union literals
+sampleSchemaWithUnionsToSanitize :: String
+sampleSchemaWithUnionsToSanitize =
+  unlines
+    [ "import { defineSchema, defineTable, v } from \"convex/server\";",
+      "",
+      "export const instruction_mime_type = v.union(",
+      "  v.literal(\"application/pdf\"),",
+      "  v.literal(\"text/html\"),",
+      "  v.literal(\"text/plain\"),",
+      "  v.literal(\"user@example.com\")",
+      ");",
+      "",
+      "export default defineSchema({",
+      "  documents: defineTable({",
+      "    name: v.string(),",
+      "    mime_type: instruction_mime_type",
+      "  })",
+      "});"
+    ]
+
+expectedSchemaWithSanitizedUnions :: Schema.ParsedFile
+expectedSchemaWithSanitizedUnions =
+  Schema.ParsedFile
+    { Schema.parsedConstants =
+        Map.fromList
+          [ ( "instruction_mime_type",
+              Schema.VUnion
+                [ Schema.VLiteral "application/pdf",
+                  Schema.VLiteral "text/html",
+                  Schema.VLiteral "text/plain",
+                  Schema.VLiteral "user@example.com"
+                ]
+            )
+          ],
+      Schema.parsedSchema =
+        Schema.Schema
+          { Schema.getTables =
+              [ Schema.Table
+                  { Schema.tableName = "documents",
+                    Schema.tableFields =
+                      [ Schema.Field "name" Schema.VString,
+                        Schema.Field "mime_type" (Schema.VReference "instruction_mime_type")
+                      ],
+                    Schema.tableIndexes = []
+                  }
+              ]
+          }
+    }
+
 -- Main test suite combining all cases.
 tests :: Test
 tests =
@@ -298,5 +347,6 @@ tests =
         runSchemaTest "parses table defined with an object reference" sampleSchemaWithObjectRef expectedSchemaWithObjectRef,
         runSchemaTest "parses complex schema without semicolons" sampleComplexNoSemicolons expectedComplexNoSemicolons,
         runSchemaTest "parses optional array of objects" sampleOptionalArrayOfObjects expectedOptionalArrayOfObjects,
-        runSchemaTest "parses array of primitives" sampleArrayOfPrimitives expectedArrayOfPrimitives
+        runSchemaTest "parses array of primitives" sampleArrayOfPrimitives expectedArrayOfPrimitives,
+        runSchemaTest "sanitizes union literals with special characters" sampleSchemaWithUnionsToSanitize expectedSchemaWithSanitizedUnions
       ]

@@ -487,11 +487,11 @@ generateConstant name u@(Schema.VUnion literals)
   | all Schema.isLiteral literals =
       let enumName = toPascalCase name
           enumFromConvexValueImpl = generateFromConvexValueImplEnum ("types::" ++ enumName) literals
-          variantNames = map Schema.getLiteralString literals
+          variantNames = map (\l -> let n = Schema.getLiteralString l in (Schema.sanitizeUnionValues n, n)) literals
           buildVariantLines [] = []
-          buildVariantLines (first : rest) =
-            (indent 2 "#[default]\n" ++ indent 2 ("#[serde(rename = \"" ++ first ++ "\")]\n") ++ indent 2 (toPascalCase first ++ ","))
-              : map (\v -> indent 2 ("#[serde(rename = \"" ++ v ++ "\")]\n") ++ indent 2 (toPascalCase v ++ ",")) rest
+          buildVariantLines ((sanitizedFirst, originalFirst) : rest) =
+            (indent 2 "#[default]\n" ++ indent 2 ("#[serde(rename = \"" ++ originalFirst ++ "\")]\n") ++ indent 2 ((toPascalCase sanitizedFirst) ++ ","))
+              : map (\(sanitizedV, originalV) -> indent 2 ("#[serde(rename = \"" ++ originalV ++ "\")]\n") ++ indent 2 (toPascalCase sanitizedV ++ ",")) rest
           code =
             unlines
               [ indent 1 "#[derive(Default, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]",
@@ -649,7 +649,7 @@ generateEnumMatchCases structName fields =
   let cases =
         map
           ( \case
-              (Schema.VLiteral s) -> "\"" ++ s ++ "\" => Ok(" ++ structName ++ "::" ++ toPascalCase s ++ "),"
+              (Schema.VLiteral s) -> "\"" ++ s ++ "\" => Ok(" ++ structName ++ "::" ++ (toPascalCase . Schema.sanitizeUnionValues $ s) ++ "),"
               _ -> error "Expected a literal for enum field"
           )
           fields
