@@ -59,7 +59,8 @@ generatePythonCode project =
 generateHeader :: String
 generateHeader =
   unlines
-    [ "from typing import Any, Generic, Iterator, Literal, TypeVar",
+    [ "import time",
+      "from typing import Any, Generic, Iterator, Literal, TypeVar",
       "",
       "from convex import ConvexClient, ConvexInt64",
       "from pydantic import BaseModel, Field, TypeAdapter, ValidationError",
@@ -174,6 +175,8 @@ generateFunction level func =
               body =
                 unlines
                   [ indent (level + 2) (rawResultDeclaration ++ handlerCall ++ "(" ++ fullFuncPath ++ ", payload)"),
+                    indent (level + 2) "duration = time.monotonic() - start_time",
+                    indent (level + 2) ("print(f\"'" ++ funcNameSnake ++ "' took {duration:.4f}s\")"),
                     indent (level + 2) "if raw_result is None:",
                     indent (level + 3) "return None",
                     indent (level + 2) ("return " ++ validationLogic)
@@ -185,13 +188,16 @@ generateFunction level func =
           [ indent level ("def " ++ funcNameSnake ++ "(self, " ++ argSignature ++ ") -> " ++ finalReturnHint ++ ":"),
             indent (level + 1) ("\"\"\"Wraps the " ++ fullFuncPath ++ " " ++ show (Action.funcType func) ++ ".\"\"\""),
             indent (level + 1) ("payload: dict[str, Any] = {" ++ payloadMapping ++ "}"),
+            indent (level + 1) "start_time = time.monotonic()",
             indent (level + 1) "try:",
             tryBlock,
             indent (level + 1) "except ValidationError as e:",
-            indent (level + 2) ("print(f\"Validation error in '" ++ funcNameSnake ++ "': {e}\")"),
+            indent (level + 2) "duration = time.monotonic() - start_time",
+            indent (level + 2) ("print(f\"Validation error in '" ++ funcNameSnake ++ "' after {duration:.4f}s: {e}\")"),
             indent (level + 2) "raise",
             indent (level + 1) "except Exception as e:",
-            indent (level + 2) ("print(f\"Error in '" ++ funcNameSnake ++ "': {e}\")"),
+            indent (level + 2) "duration = time.monotonic() - start_time",
+            indent (level + 2) ("print(f\"Error in '" ++ funcNameSnake ++ "' after {duration:.4f}s: {e}\")"),
             indent (level + 2) "raise"
           ]
    in (funcCode, defsFromArgs ++ defsFromReturn, depsFromArgs `Set.union` depsFromReturn)

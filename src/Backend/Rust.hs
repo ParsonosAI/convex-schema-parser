@@ -53,6 +53,7 @@ generateRustModuleContent project =
           "use std::marker::PhantomData;",
           "use std::pin::Pin;",
           "use std::task::{Context, Poll};",
+          "use std::time::Instant;",
           "",
           stripNewlines generateErrorEnum,
           "",
@@ -400,7 +401,10 @@ generateFunction func =
           [ indent 1 ("/// Wraps the `" ++ fullFuncPath ++ "` " ++ show (Action.funcType func) ++ "."),
             indent 1 ("pub async fn " ++ funcNameSnake ++ "(&mut self, " ++ argSignature ++ ") -> Result<" ++ returnHint ++ ", ApiError> {"),
             btreemapConstruction,
+            indent 2 "let start = Instant::now();",
             indent 2 ("let result = self.client." ++ handlerCall ++ "(\"" ++ fullFuncPath ++ "\", btmap).await?;"),
+            indent 2 "let duration = start.elapsed();",
+            indent 2 ("println!(\"'" ++ funcNameSnake ++ "' " ++ handlerCall ++ " took {:.4}s\", duration.as_secs_f64());"),
             returnHandling,
             indent 1 "}"
           ]
