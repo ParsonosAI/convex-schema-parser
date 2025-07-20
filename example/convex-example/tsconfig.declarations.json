@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    // --- Output Configuration ---
+    "outDir": "./tmp/declarations", // Output all files to a temporary directory
+    "rootDir": "./convex",          // The root of the source files we care about
+
+    // --- Generation Settings ---
+    "declaration": true,            // Generate .d.ts files
+    "emitDeclarationOnly": true,    // Don't generate any .js files
+    "skipLibCheck": true,           // Speeds up compilation by not checking library files
+
+    // --- Module Settings (to match Convex) ---
+    "module": "commonjs",
+    "target": "es2020"
+  },
+  // Tell tsc where to find the files to compile
+  "include": ["convex/**/*.ts"]
+}

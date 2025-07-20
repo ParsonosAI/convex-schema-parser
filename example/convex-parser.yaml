@@ -1,0 +1,18 @@
+# Configuration for the convex-schema-parser dev command.
+
+# Path to the Convex project directory, relative to this file.
+project_path: "./convex-example"
+
+declarations_dir: "./convex-example/tmp/declarations"
+
+validation_path: "~/.config/convex-schema-parser"
+
+# List of targets to generate code for.
+targets:
+  - lang: Python
+    output:
+      - "./python-client-1/papi.py"
+      - "./python-client-2/papi.py"
+  - lang: Rust
+    output:
+      - "./rust-client/src/papi.rs"

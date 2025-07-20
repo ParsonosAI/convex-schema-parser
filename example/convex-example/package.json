@@ -1,0 +1,26 @@
+{
+  "name": "convex-example",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "declarations:clean": "rm -rf tmp",
+    "declarations:build": "tsc -p tsconfig.declarations.json",
+    "declarations:copy-generated": "cp -r convex/_generated tmp/declarations/",
+    "declarations": "npm run declarations:clean && npm run declarations:build && npm run declarations:copy-generated"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.7.0",
+  "devDependencies": {
+    "convex": "^1.25.2",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "convex-helpers": "^0.1.94",
+    "csv-parse": "^5.6.0",
+    "dotenv": "^17.0.0",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
