@@ -278,7 +278,8 @@ generateArgSignature funcName args =
       payloadParts = map (\(n, _) -> "\"" ++ n ++ "\": " ++ toSnakeCase n) results
       nestedDefs = concatMap (\(_, (_, _, _, defs, _)) -> defs) results
       deps = Set.unions $ map (\(_, (_, _, _, _, d)) -> d) results
-   in (intercalate ", " sigParts, intercalate ", " payloadParts, nestedDefs, deps)
+      argSignature = intercalate ", " sigParts
+   in (if length sigParts == 0 then argSignature else "*, " ++ argSignature, intercalate ", " payloadParts, nestedDefs, deps)
 
 -- Helper to get the return type information.
 getReturnType :: String -> Schema.ConvexType -> (String, Bool, [Definition], Set.Set String)
