@@ -26,11 +26,22 @@ class Id(str, Generic[T]):
         return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
+instruction_mime_type = Literal["application/pdf"] | Literal["text/html"] | Literal["text/plain"]
 class MessagesDoc(BaseModel):
     id: Id['MessagesDoc'] = Field(..., alias="_id")
     creation_time: float = Field(..., alias="_creationTime")
     author: str = Field(...)
     body: str = Field(...)
+
+
+    class Config:
+        populate_by_name: bool = True
+
+class AssetsDoc(BaseModel):
+    id: Id['AssetsDoc'] = Field(..., alias="_id")
+    creation_time: float = Field(..., alias="_creationTime")
+    name: str = Field(...)
+    mime: instruction_mime_type = Field(...)
 
 
     class Config:
@@ -104,4 +115,5 @@ class API:
 
 # --- Singular Type Aliases for Ergonomics ---
 Message = MessagesDoc
+Asset = AssetsDoc
 

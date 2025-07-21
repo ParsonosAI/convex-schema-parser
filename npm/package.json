@@ -1,6 +1,6 @@
 {
   "name": "@parsonosai/convex-schema-parser",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "A type-safe client generator for Convex for both Rust and Python.",
   "bin": {
     "convex-schema-parser": "./run.js"

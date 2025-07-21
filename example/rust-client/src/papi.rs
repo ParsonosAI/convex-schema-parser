@@ -390,4 +390,138 @@ pub mod types {
             Ok(Value::Object(btmap))
         }
     }
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq)]
+    pub struct AssetsDoc {
+        #[serde(default)]
+        pub _id: Id<AssetsDoc>,
+        #[serde(default)]
+        #[serde(rename = "_creationTime")]
+        pub _creation_time: f64,
+        #[serde(default)]
+        pub name: String,
+        #[serde(default)]
+        pub mime: types::InstructionMimeType,
+    }
+    impl TryFrom<Value> for AssetsDoc {
+        type Error = ApiError;
+        fn try_from(value: Value) -> Result<Self, Self::Error> {
+            let obj = match value {
+                Value::Object(map) => map,
+                _ => return Err(ApiError::ConvexClientError("Expected object".to_string())),
+            };
+            fn get__id(
+                map: &BTreeMap<String, Value>,
+                key: &str,
+            ) -> Result<Id<types::AssetsDoc>, ApiError> {
+                match map.get(key) {
+                    Some(v) => Ok(FromConvexValue::from_convex(v.clone())?),
+                    _ => {
+                        return Err(ApiError::ConvexClientError(format!(
+                            "Expected field (Id<types::AssetsDoc>) '{}' not found",
+                            key
+                        )))
+                    }
+                }
+            }
+            fn get__creation_time(
+                map: &BTreeMap<String, Value>,
+                key: &str,
+            ) -> Result<f64, ApiError> {
+                match map.get(key) {
+                    Some(v) => Ok(FromConvexValue::from_convex(v.clone())?),
+                    _ => {
+                        return Err(ApiError::ConvexClientError(format!(
+                            "Expected field (f64) '{}' not found",
+                            key
+                        )))
+                    }
+                }
+            }
+            fn get_name(map: &BTreeMap<String, Value>, key: &str) -> Result<String, ApiError> {
+                match map.get(key) {
+                    Some(v) => Ok(FromConvexValue::from_convex(v.clone())?),
+                    _ => {
+                        return Err(ApiError::ConvexClientError(format!(
+                            "Expected field (String) '{}' not found",
+                            key
+                        )))
+                    }
+                }
+            }
+            fn get_mime(
+                map: &BTreeMap<String, Value>,
+                key: &str,
+            ) -> Result<types::InstructionMimeType, ApiError> {
+                match map.get(key) {
+                    Some(v) => Ok(FromConvexValue::from_convex(v.clone())?),
+                    _ => {
+                        return Err(ApiError::ConvexClientError(format!(
+                            "Expected field (types::InstructionMimeType) '{}' not found",
+                            key
+                        )))
+                    }
+                }
+            }
+            Ok(AssetsDoc {
+                _id: get__id(&obj, "_id")?,
+                _creation_time: get__creation_time(&obj, "_creationTime")?,
+                name: get_name(&obj, "name")?,
+                mime: get_mime(&obj, "mime")?,
+            })
+        }
+    }
+    impl FromConvexValue for AssetsDoc {
+        fn from_convex(value: Value) -> Result<Self, ApiError> {
+            AssetsDoc::try_from(value)
+        }
+    }
+    impl AssetsDoc {
+        pub fn to_convex_value(&self) -> Result<Value, ApiError> {
+            let mut btmap = BTreeMap::new();
+            btmap.insert("_id".to_string(), Value::from(self._id.clone()));
+            btmap.insert(
+                "_creation_time".to_string(),
+                Value::from(self._creation_time),
+            );
+            btmap.insert("name".to_string(), Value::from(self.name.to_string()));
+            btmap.insert(
+                "mime".to_string(),
+                Value::try_from(
+                    serde_json::to_value(self.mime.clone()).unwrap_or("unable to serialize".into()),
+                )?,
+            );
+            Ok(Value::Object(btmap))
+        }
+    }
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum InstructionMimeType {
+        #[default]
+        #[serde(rename = "application/pdf")]
+        ApplicationPdf,
+        #[serde(rename = "text/html")]
+        TextHtml,
+        #[serde(rename = "text/plain")]
+        TextPlain,
+    }
+    impl TryFrom<Value> for types::InstructionMimeType {
+        type Error = ApiError;
+        fn try_from(value: Value) -> Result<Self, Self::Error> {
+            if let Value::String(s) = &value {
+                return match s.as_str() {
+                "application/pdf" => Ok(types::InstructionMimeType::ApplicationPdf),
+                "text/html" => Ok(types::InstructionMimeType::TextHtml),
+                "text/plain" => Ok(types::InstructionMimeType::TextPlain),
+                x => Err(ApiError::ConvexClientError("Expected one of [application/pdf, text/html, text/plain] for types::InstructionMimeType but got ".to_string() + &x.to_string()))
+        };
+            }
+            Err(ApiError::ConvexClientError(
+                "Expected a string for types::InstructionMimeType".to_string(),
+            ))
+        }
+    }
+    impl FromConvexValue for types::InstructionMimeType {
+        fn from_convex(value: Value) -> Result<Self, ApiError> {
+            types::InstructionMimeType::try_from(value)
+        }
+    }
 }
