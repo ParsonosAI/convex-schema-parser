@@ -385,47 +385,72 @@ generateApiStructure _ _ = ("", "", [])
 generateFunction :: Action.ConvexFunction -> (String, [String])
 generateFunction func =
   let funcName = Action.funcName func
-      (argSignature, nestedFromArgs) = generateArgSignature funcName (Action.funcArgs func)
+      args = Action.funcArgs func
+      fullFuncPath = Action.funcPath func ++ ":" ++ funcName
+      (argSignature, nestedFromArgs) = generateArgSignatureStruct fullFuncPath args
       funcNameSnake = toSnakeCase funcName
       (returnHint, isNullable, nestedFromReturn) = getReturnType funcName (Action.funcReturn func)
       handlerCall = case Action.funcType func of
         Action.Query -> "query"
         Action.Mutation -> "mutation"
         Action.Action -> "action"
-      fullFuncPath = Action.funcPath func ++ ":" ++ funcName
       btreemapConstruction = generateBTreeMap (Action.funcArgs func)
       returnHandling = generateReturnHandling returnHint isNullable
-      funcCode =
-        unlines
-          [ indent 1 ("/// Wraps the `" ++ fullFuncPath ++ "` " ++ show (Action.funcType func) ++ "."),
-            indent 1 ("pub async fn " ++ funcNameSnake ++ "(&mut self, " ++ argSignature ++ ") -> Result<" ++ returnHint ++ ", ApiError> {"),
-            btreemapConstruction,
-            indent 2 ("let result = self.client." ++ handlerCall ++ "(\"" ++ fullFuncPath ++ "\", btmap).await?;"),
-            returnHandling,
-            indent 1 "}"
-          ]
+      funcCode = case args of
+        [] ->
+          unlines
+            [ indent 1 ("/// Wraps the `" ++ fullFuncPath ++ "` " ++ show (Action.funcType func) ++ "."),
+              indent 1 ("pub async fn " ++ funcNameSnake ++ "(&mut self) -> Result<" ++ returnHint ++ ", ApiError> {"),
+              btreemapConstruction,
+              indent 2 ("let result = self.client." ++ handlerCall ++ "(\"" ++ fullFuncPath ++ "\", btmap).await?;"),
+              returnHandling,
+              indent 1 "}"
+            ]
+        _ ->
+          unlines
+            [ indent 1 ("/// Wraps the `" ++ fullFuncPath ++ "` " ++ show (Action.funcType func) ++ "."),
+              indent 1 ("pub async fn " ++ funcNameSnake ++ "(&mut self, arg: " ++ argSignature ++ ") -> Result<" ++ returnHint ++ ", ApiError> {"),
+              btreemapConstruction,
+              indent 2 ("let result = self.client." ++ handlerCall ++ "(\"" ++ fullFuncPath ++ "\", btmap).await?;"),
+              returnHandling,
+              indent 1 "}"
+            ]
    in (funcCode, nestedFromArgs ++ nestedFromReturn)
 
 generateSubscriptionFunction :: Action.ConvexFunction -> (String, [String])
 generateSubscriptionFunction func =
   let funcName = Action.funcName func
-      (argSignature, nestedFromArgs) = generateArgSignature funcName (Action.funcArgs func)
+      args = Action.funcArgs func
+      (argSignature, nestedFromArgs) = generateArgSignatureStruct fullFuncPath args
       funcNameSnake = "subscribe_" ++ toSnakeCase funcName
       (returnHint, _, nestedFromReturn) = getReturnType funcName (Action.funcReturn func)
       fullFuncPath = Action.funcPath func ++ ":" ++ funcName
       btreemapConstruction = generateBTreeMap (Action.funcArgs func)
-      funcCode =
-        unlines
-          [ indent 1 ("/// Subscribes to the `" ++ fullFuncPath ++ "` query."),
-            indent 1 ("pub async fn " ++ funcNameSnake ++ "(&mut self, " ++ argSignature ++ ") -> Result<TypedSubscription<" ++ returnHint ++ ">, ApiError> {"),
-            btreemapConstruction,
-            indent 2 ("let raw_subscription = self.client.subscribe(\"" ++ fullFuncPath ++ "\", btmap).await?;"),
-            indent 2 "Ok(TypedSubscription {",
-            indent 3 "raw_subscription,",
-            indent 3 "_phantom: PhantomData,",
-            indent 2 "})",
-            indent 1 "}"
-          ]
+      funcCode = case args of
+        [] ->
+          unlines
+            [ indent 1 ("/// Subscribes to the `" ++ fullFuncPath ++ "` query."),
+              indent 1 ("pub async fn " ++ funcNameSnake ++ "(&mut self) -> Result<TypedSubscription<" ++ returnHint ++ ">, ApiError> {"),
+              btreemapConstruction,
+              indent 2 ("let raw_subscription = self.client.subscribe(\"" ++ fullFuncPath ++ "\", btmap).await?;"),
+              indent 2 "Ok(TypedSubscription {",
+              indent 3 "raw_subscription,",
+              indent 3 "_phantom: PhantomData,",
+              indent 2 "})",
+              indent 1 "}"
+            ]
+        _ ->
+          unlines
+            [ indent 1 ("/// Subscribes to the `" ++ fullFuncPath ++ "` query."),
+              indent 1 ("pub async fn " ++ funcNameSnake ++ "(&mut self, arg: " ++ argSignature ++ ") -> Result<TypedSubscription<" ++ returnHint ++ ">, ApiError> {"),
+              btreemapConstruction,
+              indent 2 ("let raw_subscription = self.client.subscribe(\"" ++ fullFuncPath ++ "\", btmap).await?;"),
+              indent 2 "Ok(TypedSubscription {",
+              indent 3 "raw_subscription,",
+              indent 3 "_phantom: PhantomData,",
+              indent 2 "})",
+              indent 1 "}"
+            ]
    in (funcCode, nestedFromArgs ++ nestedFromReturn)
 
 generateTypesModule :: P.ParsedProject -> [String] -> String
@@ -528,18 +553,18 @@ generateField nameHint field =
       fieldLine = serdeRename ++ serdeAttrs ++ "\n" ++ indent 2 ("pub " ++ fieldNameSnake ++ ": " ++ rustType ++ ",")
    in (fieldLine, nested)
 
-generateArgSignature :: String -> [(String, Schema.ConvexType)] -> (String, [String])
-generateArgSignature funcName args =
-  let results = map (\(n, t) -> toRustType (funcName ++ capitalize n) t) args
-      sigParts = zipWith (\(n, _) (ty, _) -> toSnakeCase n ++ ": " ++ toRustBorrowType ty) args results
-      nestedModels = concatMap snd results
-   in (intercalate ", " sigParts, nestedModels)
+generateArgSignatureStruct :: String -> [(String, Schema.ConvexType)] -> (String, [String])
+generateArgSignatureStruct _ [] = ("", [])
+generateArgSignatureStruct fullFuncName args =
+  let argStructName = toPascalCase $ map (\c -> if (c == '/' || c == ':') then '_' else c) $ fullFuncName ++ "Arg"
+      (argCode, subArgs) = generateConstant argStructName $ Schema.VObject args
+   in ("types::" ++ argStructName ++ "Object", argCode : subArgs)
 
 generateBTreeMap :: [(String, Schema.ConvexType)] -> String
 generateBTreeMap [] = indent 2 "let btmap = BTreeMap::new();"
 generateBTreeMap btmap =
   let buildStmts (name, convexType) =
-        let varName = toSnakeCase name
+        let varName = "arg." ++ toSnakeCase name
          in case convexType of
               Schema.VObject _ -> indent 1 ("btmap.insert(\"" ++ name ++ "\".to_string(), " ++ varName ++ ".to_convex_value()?);")
               Schema.VOptional innerConvexType -> indent 1 ("if let Some(v) = " ++ varName ++ " { btmap.insert(\"" ++ name ++ "\".to_string(), " ++ fieldToConvexValue ("v", innerConvexType) ++ "); }")
