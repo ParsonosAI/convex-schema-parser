@@ -1,5 +1,11 @@
 # Revision history for convex-schema-parser
 
+## 0.1.7.0 -- 2025-07-21
+
+* **Codegen Improvements Rust/Python:**
+    * We now generated `<FunctionPrefix>ArgObject`s for convex functions which receive parameters.
+    * We now enforce named parameters for the generated python functions.
+
 ## 0.1.6.0 -- 2025-07-21
 
 * **Codegen Improvements Rust:**
