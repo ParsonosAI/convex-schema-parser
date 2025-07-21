@@ -1,5 +1,10 @@
 # Revision history for convex-schema-parser
 
+## 0.1.6.0 -- 2025-07-21
+
+* **Codegen Improvements Rust:**
+    * `convex-schema-parser` now properly handles union types with special chars.
+
 ## 0.1.5.0 -- 2025-07-12
 
 *   **Backend Improvements:**

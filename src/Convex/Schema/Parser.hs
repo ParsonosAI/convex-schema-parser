@@ -229,7 +229,7 @@ convexTypeParser =
         "array" -> VArray <$> parens convexTypeParser
         "object" -> parens structParser
         "optional" -> VOptional <$> parens convexTypeParser
-        "union" -> VUnion <$> parens (sepBy convexTypeParser (lexeme $ char ','))
+        "union" -> VUnion <$> parens (sepEndBy convexTypeParser (lexeme $ char ','))
         "literal" -> VLiteral <$> parens stringLiteral
         _ -> fail $ "Unknown v-dot type: " ++ typeName
     referenceParser = VReference <$> identifier
