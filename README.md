@@ -216,7 +216,10 @@ api = convex_api.API(client)
 # Additionally, we use `pydantic` for type validation, so we raise these exceptions as well.
 try:
     project_id = convex_api.Id("prj_...")
-    project = api.functions.projects.get_project(project_id)
+    # NOTE that we force named arguments so you do not accidentally refactor stuff in your convex db
+    # and forget to adjust your other projects. See the annotation for the rust example below for
+    # the reason.
+    project = api.functions.projects.get_project(project_id=project_id)
     if project:
         print(f"Successfully fetched project: {project.project_name}")
     else:
@@ -235,7 +238,7 @@ from convex import ConvexError
 try:
     # 1. Call the generated `subscribe_*` method. This returns a generator instantly.
     tenant_id = convex_api.Id("tnt_...")
-    project_subscription = api.functions.queries.subscribe_fetch_projects(tenant_id)
+    project_subscription = api.functions.queries.subscribe_fetch_projects(tenant_id=tenant_id)
 
     print("Subscribed to projects. Waiting for updates... (Press Ctrl+C to stop)")
 
@@ -283,7 +286,13 @@ async fn main() -> anyhow::Result<()> {
     let project_id = Id::<ProjectsDoc>::new("prj_...".to_string());
     
     // This corresponds to the function `getProject` in `convex/functions/projects.ts`.
-    match api.functions().projects().get_project(&project_id).await {
+    // NOTE the use of an argument type:
+    //    We cannot rely on convex to output deterministic positional args for the type generated for convex
+    //    functions. And in case you reorder arguments of the same type (like having two or more strings with
+    //    semantic differences) this will simulate "named args".
+    //    Especially for generated code, this is safer and keeps the calling site consistent regardless
+    //    of refactors in the convex backend.
+    match api.functions().projects().get_project(convex_api::types::FunctionsQueriesGetProjectArg { project_id }).await {
         Ok(Some(project)) => {
             println!("Successfully fetched project: {}", project.project_name.unwrap_or_default());
         }
@@ -309,7 +318,7 @@ use futures_util::stream::StreamExt;
 async fn run_subscription() -> anyhow::Result<()> {
     // 1. Call the generated `subscribe_*` method.
     let tenant_id = convex_api::Id::<convex_api::types::TenantsDoc>::new("tnt_...".to_string());
-    let mut project_subscription = api.functions().queries().subscribe_fetch_projects(&tenant_id).await?;
+    let mut project_subscription = api.functions().queries().subscribe_fetch_projects(convex_api::types::FunctionsQueriesFetchProjectsArgObject { tenant_id }).await?;
 
     println!("Subscribed to projects. Waiting for updates... (Press Ctrl+C to stop)");
 
