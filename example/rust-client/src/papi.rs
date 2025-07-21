@@ -280,10 +280,10 @@ impl<'a> ListMessages<'a> {
 }
 impl<'a> SendMessage<'a> {
     /// Wraps the `sendMessage:send` Mutation.
-    pub async fn send(&mut self, author: &str, body: &str) -> Result<(), ApiError> {
+    pub async fn send(&mut self, arg: types::SendMessageSendArgObject) -> Result<(), ApiError> {
         let mut btmap = BTreeMap::new();
-        btmap.insert("author".to_string(), Value::from(author.to_string()));
-        btmap.insert("body".to_string(), Value::from(body.to_string()));
+        btmap.insert("author".to_string(), Value::from(arg.author.to_string()));
+        btmap.insert("body".to_string(), Value::from(arg.body.to_string()));
         let result = self.client.mutation("sendMessage:send", btmap).await?;
         match result {
             FunctionResult::Value(_) => Ok(()),
@@ -522,6 +522,62 @@ pub mod types {
     impl FromConvexValue for types::InstructionMimeType {
         fn from_convex(value: Value) -> Result<Self, ApiError> {
             types::InstructionMimeType::try_from(value)
+        }
+    }
+    pub type SendMessageSendArg = types::SendMessageSendArgObject;
+    #[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq)]
+    pub struct SendMessageSendArgObject {
+        #[serde(default)]
+        pub author: String,
+        #[serde(default)]
+        pub body: String,
+    }
+    impl SendMessageSendArgObject {
+        pub fn to_convex_value(&self) -> Result<Value, ApiError> {
+            let mut btmap = BTreeMap::new();
+            btmap.insert("author".to_string(), Value::from(self.author.to_string()));
+            btmap.insert("body".to_string(), Value::from(self.body.to_string()));
+            Ok(Value::Object(btmap))
+        }
+    }
+    impl TryFrom<Value> for SendMessageSendArgObject {
+        type Error = ApiError;
+        fn try_from(value: Value) -> Result<Self, Self::Error> {
+            let obj = match value {
+                Value::Object(map) => map,
+                _ => return Err(ApiError::ConvexClientError("Expected object".to_string())),
+            };
+            fn get_author(map: &BTreeMap<String, Value>, key: &str) -> Result<String, ApiError> {
+                match map.get(key) {
+                    Some(v) => Ok(FromConvexValue::from_convex(v.clone())?),
+                    _ => {
+                        return Err(ApiError::ConvexClientError(format!(
+                            "Expected field (String) '{}' not found",
+                            key
+                        )))
+                    }
+                }
+            }
+            fn get_body(map: &BTreeMap<String, Value>, key: &str) -> Result<String, ApiError> {
+                match map.get(key) {
+                    Some(v) => Ok(FromConvexValue::from_convex(v.clone())?),
+                    _ => {
+                        return Err(ApiError::ConvexClientError(format!(
+                            "Expected field (String) '{}' not found",
+                            key
+                        )))
+                    }
+                }
+            }
+            Ok(SendMessageSendArgObject {
+                author: get_author(&obj, "author")?,
+                body: get_body(&obj, "body")?,
+            })
+        }
+    }
+    impl FromConvexValue for SendMessageSendArgObject {
+        fn from_convex(value: Value) -> Result<Self, ApiError> {
+            SendMessageSendArgObject::try_from(value)
         }
     }
 }

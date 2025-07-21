@@ -20,7 +20,10 @@ async fn main() {
 
     match api
         .send_message()
-        .send("author-rust", "my blazingly short rust text")
+        .send(papi::types::SendMessageSendArgObject {
+            author: "author-rust".to_string(),
+            body: "my blazingly short rust text".to_string(),
+        })
         .await
     {
         Ok(_) => println!("Sent a message!"),

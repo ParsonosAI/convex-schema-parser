@@ -94,7 +94,7 @@ class API:
     class SendMessage:
         def __init__(self, client: ConvexClient):
             self._client = client
-        def send(self, author: str, body: str) -> None:
+        def send(self, *, author: str, body: str) -> None:
             """Wraps the "sendMessage:send" Mutation."""
             payload: dict[str, Any] = {"author": author, "body": body}
             try:
