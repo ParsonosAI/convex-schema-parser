@@ -1,4 +1,4 @@
-# Release Notes: convex-schema-parser 0.1.7.0
+# Release Notes: convex-schema-parser 0.1.8.0
 
 ## Codegeneration
 
