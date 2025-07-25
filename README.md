@@ -8,6 +8,8 @@ It offers two primary modes of operation:
 
 2. A persistent `dev` mode that watches your Convex project for changes and automatically regenerates your clients, providing a seamless development experience.
 
+3. You can checkout a [short overview video](https://youtu.be/4kzkhacJYvk).
+
 > [!IMPORTANT]
 > At the bottom you will find a USAGE section and in `examples` a complete simple example configuration with multiple projects.
 
