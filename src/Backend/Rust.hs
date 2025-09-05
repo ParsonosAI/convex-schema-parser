@@ -981,7 +981,7 @@ innerValueToConvexArray varName (Schema.VArray inner) =
         then "Value::Array(" ++ varName ++ ".iter().map(|item| " ++ itemConversion ++ ").collect::<Result<Vec<_>, _>>()?)"
         else "Value::Array(" ++ varName ++ ".iter().map(|item| " ++ itemConversion ++ ").collect())"
 innerValueToConvexArray varName (Schema.VObject _) =
-  varName ++ ".to_convex_value()?"
+  varName ++ ".to_convex_value()"
 innerValueToConvexArray varName t
   | isComplexForBTreeMap t = "Value::try_from(serde_json::to_value(" ++ toClonedValue varName t ++ ").unwrap_or(\"unable to serialize\".into()))"
   | otherwise = "Value::from(" ++ toClonedValue varName t ++ ")"
