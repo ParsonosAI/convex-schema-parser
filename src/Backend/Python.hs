@@ -80,6 +80,9 @@ generateHeader =
       "",
       "        return core_schema.union_schema([from_instance_schema, from_int_schema])",
       "",
+      "    def to_convex(self) -> ConvexInt64:",
+      "        return ConvexInt64(self.value)",
+      "",
       "T = TypeVar('T')",
       "class Id(str, Generic[T]):",
       "    @classmethod",
@@ -121,11 +124,31 @@ generateTable table =
             unlines fieldLines,
             "",
             indent 1 "class Config:",
-            indent 2 "populate_by_name: bool = True"
+            indent 2 "populate_by_name: bool = True",
+            unlines $ pythonToConvex 1 $ map (\f -> (Schema.fieldName f, Schema.fieldType f)) allFields
           ]
       deps = Set.delete className (Set.unions fieldDeps)
       definition = Definition {defName = className, defDeps = deps, defCode = tableCode}
    in (definition, concat nestedDefsFromFields)
+
+pythonToConvex :: Int -> [(String, Schema.ConvexType)] -> [String]
+pythonToConvex baseIndent fields =
+  [ indent baseIndent $ "def to_convex(self) -> dict[str, Any]:",
+    indent (baseIndent + 1) "return {",
+    unlines $ map (indent (baseIndent + 2) . append ',' . fieldToConvexMap) fields,
+    indent (baseIndent + 1) "}"
+  ]
+  where
+    append :: Char -> String -> String
+    append c s = s ++ [c]
+    fieldToConvexMap :: (String, Schema.ConvexType) -> String
+    fieldToConvexMap (fname, ctype) = "\"" ++ fname ++ "\" :" ++ fieldConversion
+      where
+        fieldConversion = case ctype of
+          Schema.VInt64 -> "self." ++ fieldNameSnake ++ ".to_convex()"
+          _ -> "self." ++ fieldNameSnake
+        isSystemField = "_" `isPrefixOf` fname
+        fieldNameSnake = if isSystemField then toSnakeCase (tail fname) else toSnakeCase fname
 
 -- | Generates singular type aliases for all table documents.
 generateAliases :: Schema.Schema -> String
@@ -347,7 +370,9 @@ toPythonTypeParts nameHint typ = case typ of
               unlines fieldLines,
               "",
               indent 1 "class Config:",
-              indent 2 "populate_by_name: bool = True"
+              indent 2 "populate_by_name: bool = True",
+              "",
+              unlines $ pythonToConvex 1 fields
             ]
         deps = Set.unions fieldDeps
         newModelDef = Definition {defName = className, defDeps = deps, defCode = newModelCode}
