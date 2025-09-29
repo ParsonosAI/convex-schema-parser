@@ -28,7 +28,7 @@ runSchemaUnificationTest testName schemaString actionString expected =
         actionResult <- runParserT (Action.parseActionFile "testPath") initialState "(test)" actionString
         case actionResult of
           Left err -> assertFailure ("Action parser failed: " ++ show err)
-          Right funcs ->
+          Right (funcs, _) ->
             let project =
                   Parser.ParsedProject
                     { Parser.ppSchema = Schema.parsedSchema parsedSchemaFile,
@@ -52,7 +52,7 @@ runUnificationTest testName path constants input expected =
     result <- runParserT (Action.parseActionFile path) initialState "(test)" input
     case result of
       Left err -> assertFailure ("Parser failed: " ++ show err)
-      Right funcs ->
+      Right (funcs, _) ->
         let project =
               Parser.ParsedProject
                 { Parser.ppSchema = Schema.Schema {Schema.getTables = []},
@@ -61,6 +61,20 @@ runUnificationTest testName path constants input expected =
                 }
             unifiedProject = Parser.runUnificationPass project
          in Parser.ppFunctions unifiedProject @?= expected
+
+runTypesParserTest ::
+  String ->
+  String ->
+  [Action.DTSType] ->
+  Test
+runTypesParserTest testName input expected =
+  testName ~: TestCase $ do
+    result <- runParserT (Action.parseActionFile "testPath") initialState "(test)" input
+    case result of
+      Left err -> assertFailure ("Parser failed: " ++ show err)
+      Right (_, types) -> types @?= expected
+  where
+    initialState = Schema.ParserState {Schema.psConstants = Map.empty}
 
 tests :: Test
 tests =
@@ -74,6 +88,7 @@ tests =
         runActionTest "parses public action with external type" "functions/stripe" sampleStripeCheckoutAction sampleStripeCheckoutActionExpected,
         runActionTest "parses public action with external type as VAny" "functions/stripe" sampleStripeSubscriptionActionPublic expectedStripeSubscriptionActionPublic,
         runActionTest "parses createAsset mutation with complex args" "functions/assets" sampleCreateAssetAction expectedCreateAssetAction,
+        runTypesParserTest "parses interface definition" sampleInterfaceDefinition expectedInterfaceFunction,
         runUnificationTest
           "unifies function return with named doc"
           "functions/users"
@@ -92,7 +107,7 @@ tests =
         result <- runParserT (Action.parseActionFile path) Schema.initialState "(test)" input
         case result of
           Left err -> assertFailure ("Parser failed: " ++ show err)
-          Right funcs -> funcs @?= expected
+          Right (funcs, _) -> funcs @?= expected
 
 sampleCreateProject :: String
 sampleCreateProject =
@@ -406,5 +421,32 @@ expectedGetAssetsAction =
             ("secret", Schema.VString)
           ],
         Action.funcReturn = Schema.VArray (Schema.VReference "AssetsDoc")
+      }
+  ]
+
+sampleInterfaceDefinition :: String
+sampleInterfaceDefinition =
+  unlines
+    [ "/**",
+      " * This is a sample interface definition for testing.",
+      " */",
+      "export interface User {",
+      "  // The user's name",
+      "  name: string;",
+      "  // The user's email address",
+      "  email: string;",
+      "}",
+      "",
+      "import { somethingElse } from \"somewhere\"; // This should be ignored"
+    ]
+
+expectedInterfaceFunction :: [Action.DTSType]
+expectedInterfaceFunction =
+  [ Action.DTSType
+      { Action.dtsTypeName = "User",
+        Action.dtsTypeFields =
+          [ ("name", Schema.VString),
+            ("email", Schema.VString)
+          ]
       }
   ]

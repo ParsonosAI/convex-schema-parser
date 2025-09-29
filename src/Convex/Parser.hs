@@ -76,28 +76,33 @@ parseProjectFromContents schemaContent apiFileContent actionContents = do
       let actionContentMap = Map.fromList actionContents
 
       -- Parse action files
-      allFunctions <- fmap concat . forM modulePaths $ \modulePath -> do
+      moduleResults <- forM modulePaths $ \modulePath -> do
         let astPath = replaceExtension modulePath ""
         case Map.lookup modulePath actionContentMap of
           Nothing -> do
             putStrLn $ "Action content not found for module: " ++ modulePath
-            return []
+            return ([], [])
           Just actionContent -> do
             actionResult <- runParserT (Action.parseActionFile astPath) initialState modulePath actionContent
             case actionResult of
               Left err -> do
                 putStrLn $ "Failed to parse actions from: " ++ modulePath ++ " | Error: " ++ show err
-                return []
-              Right funcs -> do
+                return ([], [])
+              Right (funcs, extraTypes) -> do
                 putStrLn $ "Parsed actions from: " ++ modulePath
                 putStrLn $ show (length funcs) ++ " functions found"
-                return funcs
+                putStrLn $ show (length extraTypes) ++ " extra types found"
+                return (funcs, extraTypes)
+
+      let (allFunctions, allExtraTypes) = foldr (\(fs, ts) (accF, accT) -> (fs ++ accF, ts ++ accT)) ([], []) moduleResults
 
       -- Construct and unify project
       let project =
             ParsedProject
               { ppSchema = Schema.parsedSchema schemaFile,
-                ppConstants = Schema.parsedConstants schemaFile,
+                ppConstants =
+                  Schema.parsedConstants schemaFile
+                    `Map.union` (Map.fromList [(Action.dtsTypeName t, Schema.VObject . Action.dtsTypeFields $ t) | t <- allExtraTypes]),
                 ppFunctions = allFunctions
               }
 

@@ -3,8 +3,10 @@
 
 module Convex.Action.Parser
   ( ConvexFunction (..),
+    DTSType (..),
     FuncType (..),
     parseActionFile,
+    registeredTypesParser,
     Schema.ConvexType (VVoid),
   )
 where
@@ -26,6 +28,12 @@ data ConvexFunction = ConvexFunction
     funcType :: FuncType,
     funcArgs :: [(String, Schema.ConvexType)],
     funcReturn :: Schema.ConvexType
+  }
+  deriving (Show, Eq)
+
+data DTSType = DTSType
+  { dtsTypeName :: String,
+    dtsTypeFields :: [(String, Schema.ConvexType)]
   }
   deriving (Show, Eq)
 
@@ -130,6 +138,11 @@ dtsTypeParser = do
 -- A parser for a single field inside an argument or object type
 dtsFieldParser :: SchemaParser (String, Schema.ConvexType)
 dtsFieldParser = lexeme $ do
+  -- Ignore potential comments before the field starting // or /** */
+  optional (try (lexeme (string "/**") *> manyTill anyChar (try (string "*/"))))
+  void $ many (try (lexeme (string "//" *> manyTill anyChar (try newline))))
+  whiteSpace
+
   name <- identifier
   isOptional <- optionMaybe (lexeme (char '?'))
   void $ lexeme $ char ':'
@@ -202,13 +215,6 @@ registeredFunctionParser fPath = lexeme $ do
     "internal" -> return Nothing
     other -> fail $ "Unknown or unhandled visibility in d.ts file: \"" ++ other ++ "\""
 
-mapMaybe :: (a -> Maybe b) -> [a] -> [b]
-mapMaybe _ [] = []
-mapMaybe f (x : xs) =
-  case f x of
-    Just v -> v : mapMaybe f xs
-    Nothing -> mapMaybe f xs
-
 -- | A helper to parse and ignore statements that we don't care about.
 ignoredStatementParser :: SchemaParser ()
 ignoredStatementParser =
@@ -230,15 +236,34 @@ ignoredStatementParser =
         *> manyTill anyChar (try (string (Token.commentEnd langDef)))
         *> pure ()
 
-parseActionFile :: String -> SchemaParser [ConvexFunction]
+registeredTypesParser :: SchemaParser (Maybe DTSType)
+registeredTypesParser = lexeme $ do
+  optional (try (lexeme (string "/**") *> manyTill anyChar (try (string "*/"))))
+  whiteSpace
+
+  -- Parse `[export] interface <Name> { ... }`
+  void $ optional (try (reserved "export"))
+  reserved "interface"
+  typeName <- identifier
+  fields <- braces (sepEndBy dtsFieldParser (lexeme (char ';')))
+  return $ Just (DTSType typeName fields)
+
+data ParsedDTs = ParsedFunction ConvexFunction | ParsedType DTSType deriving (Show, Eq)
+
+parseActionFile :: String -> SchemaParser ([ConvexFunction], [DTSType])
 parseActionFile path = do
   whiteSpace
-  -- FIX: In a loop, consume either a function or an ignored statement,
-  -- effectively skipping over comments and imports between functions.
   results <-
     many
-      ( (try (Right <$> registeredFunctionParser path))
-          <|> (try (Left <$> ignoredStatementParser))
+      ( (try ((ParsedFunction <$>) <$> registeredFunctionParser path))
+          <|> (try ((ParsedType <$>) <$> registeredTypesParser))
+          <|> (try (ignoredStatementParser >> return Nothing))
       )
-  -- Filter out the ignored statements (Lefts) and keep only the functions (Rights).
-  return $ mapMaybe (either (const Nothing) id) results
+  -- Keep only Just values and separate functions from types
+  let (funcs, types) = foldr separate ([], []) results
+  return (funcs, types)
+  where
+    separate :: Maybe ParsedDTs -> ([ConvexFunction], [DTSType]) -> ([ConvexFunction], [DTSType])
+    separate (Just (ParsedFunction func)) (fs, ts) = (func : fs, ts)
+    separate (Just (ParsedType typ)) (fs, ts) = (fs, typ : ts)
+    separate Nothing acc = acc

@@ -72,7 +72,7 @@ expectedComplexSerializationImpl =
       "}",
       "            btmap.insert(\"value\".to_string(), Value::from(self.value));",
       "            if let Some(v) = &self.tags {",
-      "    btmap.insert(\"tags\".to_string(), Value::Array(v.iter().map(|item| item.to_convex_value()?).collect::<Result<Vec<_>, _>>()?));",
+      "    btmap.insert(\"tags\".to_string(), Value::Array(v.iter().map(|item| item.to_convex_value()).collect::<Result<Vec<_>, _>>()?));",
       "}",
       "        Ok(Value::Object(btmap))",
       "    }",
