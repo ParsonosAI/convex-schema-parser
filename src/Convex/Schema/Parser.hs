@@ -1,3 +1,4 @@
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -43,11 +44,23 @@ data ParsedFile = ParsedFile
 newtype Schema = Schema {getTables :: [Table]}
   deriving (Show, Eq)
 
-data Index = Index
-  { indexName :: String,
-    indexFields :: [String]
-  }
+data Index
+  = Index
+      { indexName :: String,
+        indexFields :: [String]
+      }
+  | VectorIndex
+      { indexName :: String,
+        indexVectorField :: String,
+        indexDimensions :: Int,
+        indexFilterFields :: [String]
+      }
   deriving (Show, Eq)
+
+data VectorIndexOption
+  = VectorFieldOption String
+  | DimensionsOption Int
+  | FilterFieldsOption [String]
 
 data Table = Table
   { tableName :: String,
@@ -167,13 +180,66 @@ fieldParser = lexeme $ do
 indexParser :: SchemaParser Index
 indexParser = lexeme $ do
   void $ char '.'
-  reserved "index"
-  (iName, iFields) <- parens $ do
-    name <- stringLiteral
-    void $ lexeme $ char ','
-    fields <- brackets $ sepEndBy stringLiteral (lexeme $ char ',')
-    return (name, fields)
-  return $ Index iName iFields
+  indexType <- identifier
+  case indexType of
+    "index" -> parseScalarIndex
+    "vectorIndex" -> parseVectorIndex
+    _ -> fail $ "Unknown index type: " ++ indexType
+  where
+    parseScalarIndex = do
+      (iName, iFields) <- parens $ do
+        name <- stringLiteral
+        void $ lexeme $ char ','
+        fields <- brackets $ sepEndBy stringLiteral (lexeme $ char ',')
+        return (name, fields)
+      return $ Index iName iFields
+
+    parseVectorIndex = do
+      (iName, vectorField, dimensions, filterFields) <- parens $ do
+        name <- stringLiteral
+        void $ lexeme $ char ','
+        (vecField, dims, filters) <- vectorIndexOptionsParser
+        return (name, vecField, dims, filters)
+      return $
+        VectorIndex
+          { indexName = iName,
+            indexVectorField = vectorField,
+            indexDimensions = dimensions,
+            indexFilterFields = filterFields
+          }
+
+    vectorIndexOptionsParser :: SchemaParser (String, Int, [String])
+    vectorIndexOptionsParser = do
+      opts <- braces $ sepEndBy vectorOption (lexeme $ char ',')
+      let vectorFields = [field | VectorFieldOption field <- opts]
+          dimensionValues = [dim | DimensionsOption dim <- opts]
+          filters = [fs | FilterFieldsOption fs <- opts]
+      vectorField <-
+        case vectorFields of
+          [field] -> return field
+          [] -> fail "vectorIndex is missing required option 'vectorField'"
+          _ -> fail "vectorIndex received multiple 'vectorField' options"
+      dimensions <-
+        case dimensionValues of
+          [dim] -> return dim
+          [] -> fail "vectorIndex is missing required option 'dimensions'"
+          _ -> fail "vectorIndex received multiple 'dimensions' options"
+      filterFields <-
+        case filters of
+          [] -> return []
+          [fs] -> return fs
+          _ -> fail "vectorIndex received multiple 'filterFields' options"
+      return (vectorField, dimensions, filterFields)
+
+    vectorOption :: SchemaParser VectorIndexOption
+    vectorOption = lexeme $ do
+      key <- identifier <|> stringLiteral
+      void $ lexeme $ char ':'
+      case key of
+        "vectorField" -> VectorFieldOption <$> stringLiteral
+        "dimensions" -> DimensionsOption . fromInteger <$> Token.integer lexer
+        "filterFields" -> FilterFieldsOption <$> brackets (sepEndBy stringLiteral (lexeme $ char ','))
+        _ -> fail $ "Unknown vectorIndex option: " ++ key
 
 tableParser :: SchemaParser Table
 tableParser = lexeme $ do

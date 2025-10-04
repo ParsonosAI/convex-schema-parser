@@ -337,6 +337,51 @@ expectedSchemaWithSanitizedUnions =
           }
     }
 
+sampleSchemaWithVectorIndex :: String
+sampleSchemaWithVectorIndex =
+  unlines
+    [ "import { v, defineSchema, defineTable } from \"convex/server\";",
+      "",
+      "export default defineSchema({",
+      "  embeddings: defineTable({",
+      "    creator: v.string(),",
+      "    linked_block: v.id(\"parsing_cache\"),",
+      "    embedding: v.array(v.float64()),",
+      "  }).vectorIndex(\"by_embedding\", {",
+      "    vectorField: \"embedding\",",
+      "    dimensions: 1000,",
+      "    filterFields: [\"creator\"],",
+      "  }),",
+      "});"
+    ]
+
+expectedSchemaWithVectorIndex :: Schema.ParsedFile
+expectedSchemaWithVectorIndex =
+  Schema.ParsedFile
+    { Schema.parsedConstants = Map.empty,
+      Schema.parsedSchema =
+        Schema.Schema
+          { Schema.getTables =
+              [ Schema.Table
+                  { Schema.tableName = "embeddings",
+                    Schema.tableFields =
+                      [ Schema.Field "creator" Schema.VString,
+                        Schema.Field "linked_block" (Schema.VId "parsing_cache"),
+                        Schema.Field "embedding" (Schema.VArray Schema.VFloat64)
+                      ],
+                    Schema.tableIndexes =
+                      [ Schema.VectorIndex
+                          { Schema.indexName = "by_embedding",
+                            Schema.indexVectorField = "embedding",
+                            Schema.indexDimensions = 1000,
+                            Schema.indexFilterFields = ["creator"]
+                          }
+                      ]
+                  }
+              ]
+          }
+    }
+
 -- Main test suite combining all cases.
 tests :: Test
 tests =
@@ -348,5 +393,6 @@ tests =
         runSchemaTest "parses complex schema without semicolons" sampleComplexNoSemicolons expectedComplexNoSemicolons,
         runSchemaTest "parses optional array of objects" sampleOptionalArrayOfObjects expectedOptionalArrayOfObjects,
         runSchemaTest "parses array of primitives" sampleArrayOfPrimitives expectedArrayOfPrimitives,
-        runSchemaTest "sanitizes union literals with special characters" sampleSchemaWithUnionsToSanitize expectedSchemaWithSanitizedUnions
+        runSchemaTest "sanitizes union literals with special characters" sampleSchemaWithUnionsToSanitize expectedSchemaWithSanitizedUnions,
+        runSchemaTest "parses vector indexes" sampleSchemaWithVectorIndex expectedSchemaWithVectorIndex
       ]
