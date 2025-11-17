@@ -337,6 +337,49 @@ expectedSchemaWithSanitizedUnions =
           }
     }
 
+sampleSchemaWithSearchIndex :: String
+sampleSchemaWithSearchIndex =
+  unlines
+    [ "import { v, defineSchema, defineTable } from \"convex/server\";",
+      "",
+      "export default defineSchema({",
+      "  articles: defineTable({",
+      "    title: v.string(),",
+      "    content: v.string(),",
+      "  }).searchIndex(\"by_content\", {",
+      "     searchField: \"content\",",
+      "     filterFields: [\"title\"],",
+      "     staged: false,",
+      "  }),",
+      "});"
+    ]
+
+expectedSchemaWithSearchIndex :: Schema.ParsedFile
+expectedSchemaWithSearchIndex =
+  Schema.ParsedFile
+    { Schema.parsedConstants = Map.empty,
+      Schema.parsedSchema =
+        Schema.Schema
+          { Schema.getTables =
+              [ Schema.Table
+                  { Schema.tableName = "articles",
+                    Schema.tableFields =
+                      [ Schema.Field "title" Schema.VString,
+                        Schema.Field "content" Schema.VString
+                      ],
+                    Schema.tableIndexes =
+                      [ Schema.SearchIndex
+                          { Schema.indexName = "by_content",
+                            Schema.indexSearchField = "content",
+                            Schema.indexFilterFields = ["title"],
+                            Schema.indexStaged = False
+                          }
+                      ]
+                  }
+              ]
+          }
+    }
+
 sampleSchemaWithVectorIndex :: String
 sampleSchemaWithVectorIndex =
   unlines
@@ -394,5 +437,6 @@ tests =
         runSchemaTest "parses optional array of objects" sampleOptionalArrayOfObjects expectedOptionalArrayOfObjects,
         runSchemaTest "parses array of primitives" sampleArrayOfPrimitives expectedArrayOfPrimitives,
         runSchemaTest "sanitizes union literals with special characters" sampleSchemaWithUnionsToSanitize expectedSchemaWithSanitizedUnions,
-        runSchemaTest "parses vector indexes" sampleSchemaWithVectorIndex expectedSchemaWithVectorIndex
+        runSchemaTest "parses vector indexes" sampleSchemaWithVectorIndex expectedSchemaWithVectorIndex,
+        runSchemaTest "parses search indexes" sampleSchemaWithSearchIndex expectedSchemaWithSearchIndex
       ]

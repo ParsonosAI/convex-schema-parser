@@ -55,7 +55,18 @@ data Index
         indexDimensions :: Int,
         indexFilterFields :: [String]
       }
+  | SearchIndex
+      { indexName :: String,
+        indexSearchField :: String,
+        indexFilterFields :: [String],
+        indexStaged :: Bool
+      }
   deriving (Show, Eq)
+
+data SearchIndexOption
+  = SearchFieldOption String
+  | SearchFilterFieldsOption [String]
+  | SearchStagedOption Bool
 
 data VectorIndexOption
   = VectorFieldOption String
@@ -184,6 +195,7 @@ indexParser = lexeme $ do
   case indexType of
     "index" -> parseScalarIndex
     "vectorIndex" -> parseVectorIndex
+    "searchIndex" -> parseSearchIndex
     _ -> fail $ "Unknown index type: " ++ indexType
   where
     parseScalarIndex = do
@@ -207,6 +219,54 @@ indexParser = lexeme $ do
             indexDimensions = dimensions,
             indexFilterFields = filterFields
           }
+
+    parseSearchIndex = do
+      (iName, searchField, filterFields, staged) <- parens $ do
+        name <- stringLiteral
+        void $ lexeme $ char ','
+        (sField, fFields, isStaged) <- searchIndexOptionsParser
+        return (name, sField, fFields, isStaged)
+      return $
+        SearchIndex
+          { indexName = iName,
+            indexSearchField = searchField,
+            indexFilterFields = filterFields,
+            indexStaged = staged
+          }
+
+    searchIndexOptionsParser :: SchemaParser (String, [String], Bool)
+    searchIndexOptionsParser = do
+      opts <- braces $ sepEndBy searchOption (lexeme $ char ',')
+      let searchFields = [field | SearchFieldOption field <- opts]
+          filterFields = [fs | SearchFilterFieldsOption fs <- opts]
+          stagedValues = [staged | SearchStagedOption staged <- opts]
+      -- Only searchField is required.
+      searchField <-
+        case searchFields of
+          [field] -> return field
+          [] -> fail "searchIndex is missing required option 'searchField'"
+          _ -> fail "searchIndex received multiple 'searchField' options"
+      filterFieldsFinal <-
+        case filterFields of
+          [] -> return []
+          [fs] -> return fs
+          _ -> fail "searchIndex received multiple 'filterFields' options"
+      stagedFinal <-
+        case stagedValues of
+          [staged] -> return staged
+          [] -> return False
+          _ -> fail "searchIndex received multiple 'staged' options"
+      return (searchField, filterFieldsFinal, stagedFinal)
+
+    searchOption :: SchemaParser SearchIndexOption
+    searchOption = lexeme $ do
+      key <- identifier <|> stringLiteral
+      void $ lexeme $ char ':'
+      case key of
+        "searchField" -> SearchFieldOption <$> stringLiteral
+        "filterFields" -> SearchFilterFieldsOption <$> brackets (sepEndBy stringLiteral (lexeme $ char ','))
+        "staged" -> SearchStagedOption <$> (lexeme (string "true" >> return True) <|> (string "false" >> return False))
+        _ -> fail $ "Unknown searchIndex option: " ++ key
 
     vectorIndexOptionsParser :: SchemaParser (String, Int, [String])
     vectorIndexOptionsParser = do
