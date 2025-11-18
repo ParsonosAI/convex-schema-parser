@@ -103,7 +103,7 @@ sampleSchemaWithObjectRef =
       "// A top-level constant defining the fields for a table.",
       "const authCodeValidator = {",
       "  exchange_code: v.string(),",
-      "  tenant_id: v.id(\"tenants\"),",
+      "  tenant_id: v.id(\"tenants\")",
       "};",
       "// A type alias, which should be parsed and stored.",
       "export type MyId = typeof v.id(\"tenants\");",

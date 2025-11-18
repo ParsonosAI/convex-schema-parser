@@ -21,6 +21,7 @@ where
 import Control.Monad
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Debug.Trace (trace)
 import Text.Parsec
 import qualified Text.Parsec.Language as Token
 import qualified Text.Parsec.Token as Token
@@ -188,6 +189,22 @@ fieldParser = lexeme $ do
   value <- convexTypeParser
   return $ Field key value
 
+-- After parsing a ConvexType, optionally swallow a trailing TS-style cast:
+--   v.string() as IsbnValidator
+-- We ignore the type on the Haskell side.
+withOptionalAs :: SchemaParser ConvexType -> SchemaParser ConvexType
+withOptionalAs p = do
+  t <- p
+  _ <- optional $ try $ do
+    whiteSpace
+    -- TS 'as' keyword (we didn't add it as reserved, so use a raw string)
+    _ <- lexeme (string "as")
+    -- Extremely simple type parser: just an identifier or string literal.
+    -- This is enough for `as IsbnValidator` or `as "foo"`.
+    _ <- lexeme (identifier <|> stringLiteral)
+    return ()
+  return t
+
 indexParser :: SchemaParser Index
 indexParser = lexeme $ do
   void $ char '.'
@@ -306,15 +323,17 @@ tableParser = lexeme $ do
   tName <- identifier <|> stringLiteral
   void $ lexeme $ char ':'
   reserved "defineTable"
-  -- First, parse the table definition itself inside the parentheses.
   fields <- parens $ do
-    tableDef <- (try (VObject . map fieldToTuple <$> braces (sepEndBy fieldParser (lexeme $ char ',')))) <|> (VReference <$> identifier)
+    tableDef <-
+      (try (VObject . map fieldToTuple <$> braces (sepEndBy fieldParser (lexeme $ char ','))))
+        <|> (VReference <$> identifier)
     case tableDef of
-      VReference refName -> do
+      VReference refName -> trace ("refName parsed: " ++ show refName) $ do
         st <- getState
-        case Map.lookup refName (psConstants st) of
-          Just (VObject fs) -> return $ map (\(n, t) -> Field n t) fs
-          _ -> fail $ "Table '" ++ tName ++ "' references an unknown or non-object constant: " ++ refName
+        trace ("psConstants keys: " ++ show (Map.keys (psConstants st))) $
+          case Map.lookup refName (psConstants st) of
+            Just (VObject fs) -> return $ map (\(n, t) -> Field n t) fs
+            _ -> fail $ "Table '" ++ tName ++ "' references an unknown or non-object constant: " ++ refName
       VObject fs -> return $ map (\(n, t) -> Field n t) fs
       _ -> fail "Invalid table definition: expected an object or a reference."
 
@@ -331,7 +350,10 @@ structParser = do
   return res
 
 convexTypeParser :: SchemaParser ConvexType
-convexTypeParser =
+convexTypeParser = withOptionalAs convexTypeCore
+
+convexTypeCore :: SchemaParser ConvexType
+convexTypeCore =
   choice . map try $
     [ vParser,
       structParser,
@@ -358,6 +380,7 @@ convexTypeParser =
         "union" -> VUnion <$> parens (sepEndBy convexTypeParser (lexeme $ char ','))
         "literal" -> VLiteral <$> parens stringLiteral
         _ -> fail $ "Unknown v-dot type: " ++ typeName
+
     referenceParser = VReference <$> identifier
 
 -- | Sanitizes union literals. It might be that a union like this is defined:
