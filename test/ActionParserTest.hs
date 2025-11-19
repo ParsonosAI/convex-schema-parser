@@ -88,6 +88,7 @@ tests =
         runActionTest "parses public action with external type" "functions/stripe" sampleStripeCheckoutAction sampleStripeCheckoutActionExpected,
         runActionTest "parses public action with external type as VAny" "functions/stripe" sampleStripeSubscriptionActionPublic expectedStripeSubscriptionActionPublic,
         runActionTest "parses createAsset mutation with complex args" "functions/assets" sampleCreateAssetAction expectedCreateAssetAction,
+        runActionTest "parses intersection types in args" "test/api" sampleIntersectionAction expectedIntersectionAction,
         runTypesParserTest "parses interface definition" sampleInterfaceDefinition expectedInterfaceFunction,
         runUnificationTest
           "unifies function return with named doc"
@@ -126,6 +127,33 @@ expectedCreateProject =
         Action.funcType = Action.Mutation,
         Action.funcArgs =
           [ ("project_name", Schema.VOptional Schema.VString),
+            ("tenant_id", Schema.VId "tenants")
+          ],
+        Action.funcReturn = Schema.VId "projects"
+      }
+  ]
+
+sampleIntersectionAction :: String
+sampleIntersectionAction =
+  unlines
+    [ "export declare const createProject: import(\"convex/server\").RegisteredMutation<\"public\", {",
+      "    isbn?: string & {",
+      "        _: \"isbn\";",
+      "    };",
+      "    project_name?: string;",
+      "    tenant_id: import(\"convex/values\").GenericId<\"tenants\">;",
+      "}, Promise<import(\"convex/values\").GenericId<\"projects\">>>;"
+    ]
+
+expectedIntersectionAction :: [Action.ConvexFunction]
+expectedIntersectionAction =
+  [ Action.ConvexFunction
+      { Action.funcName = "createProject",
+        Action.funcPath = "test/api",
+        Action.funcType = Action.Mutation,
+        Action.funcArgs =
+          [ ("isbn", Schema.VOptional Schema.VString),
+            ("project_name", Schema.VOptional Schema.VString),
             ("tenant_id", Schema.VId "tenants")
           ],
         Action.funcReturn = Schema.VId "projects"
