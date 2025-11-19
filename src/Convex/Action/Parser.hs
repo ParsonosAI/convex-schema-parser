@@ -103,8 +103,8 @@ angles p = lexeme (char '<') *> p <* lexeme (char '>')
 dtsTypeParser :: SchemaParser Schema.ConvexType
 dtsTypeParser = do
   -- A type can be a union of other types
-  types <- sepBy1 singleType (lexeme (char '|'))
-  let baseType = if length types == 1 then head types else Schema.VUnion types
+  unions <- sepBy1 intersectionTypeParser (lexeme (char '|'))
+  let baseType = if length unions == 1 then head unions else Schema.VUnion unions
   -- After parsing the base type, check for array suffixes `[]`
   arrayCount <- length <$> many (lexeme (string "[]"))
   -- Wrap the base type in VArray for each `[]` found
@@ -120,6 +120,16 @@ dtsTypeParser = do
           return Schema.VAny
         else -- Otherwise, it's a single-word identifier, treat as a reference.
           return (Schema.VReference (head parts))
+
+    -- intersection of atomic types, e.g. `string & { _: "isbn" }`
+    intersectionTypeParser :: SchemaParser Schema.ConvexType
+    intersectionTypeParser = do
+      parts <- sepBy1 singleType (lexeme (char '&'))
+      -- We deliberately ignore all but the first component, to drop branding like:
+      --   string & { _: "isbn" }
+      -- and just keep the base type (`string`).
+      -- If you ever need smarter logic, you can refine this combine function.
+      return (head parts)
 
     singleType =
       (Schema.VString <$ try (reserved "string"))
