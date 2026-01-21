@@ -225,6 +225,51 @@ registeredFunctionParser fPath = lexeme $ do
     "internal" -> return Nothing
     other -> fail $ "Unknown or unhandled visibility in d.ts file: \"" ++ other ++ "\""
 
+-- | Consumes exports that we don't know how to parse by respecting
+-- nested braces/parens, so we don't stop at internal semicolons.
+skippedExportParser :: SchemaParser ()
+skippedExportParser = do
+  reserved "export"
+  reserved "declare"
+  reserved "const"
+  _ <- identifier
+  void $ lexeme $ char ':'
+
+  skipStmtRHS
+
+  return ()
+
+-- | Consumes the Right-Hand Side of a statement until the terminating semicolon.
+-- It handles nested braces/parens recursively.
+skipStmtRHS :: SchemaParser ()
+skipStmtRHS = do
+  -- Consume "top level" chunks until we hit the statement terminator
+  void $ many topLevelElement
+  void $ lexeme (char ';')
+  where
+    topLevelElement :: SchemaParser ()
+    topLevelElement =
+      choice
+        [ void (try stringLiteral), -- Consume strings (they might contain ;)
+          void (try (braces skipNested)), -- Recurse into objects { ... }
+          void (try (parens skipNested)), -- Recurse into parens ( ... )
+          void (noneOf ";") -- Consume anything else (space, identifiers, etc)
+        ]
+
+-- | Helper to skip content inside braces/parens.
+-- It allows semicolons (because we are inside a block), but stops at the closing delimiter.
+skipNested :: SchemaParser ()
+skipNested = void $ many nestedElement
+  where
+    nestedElement :: SchemaParser ()
+    nestedElement =
+      choice
+        [ void (try stringLiteral),
+          void (try (braces skipNested)), -- Nested recursion {{ ... }}
+          void (try (parens skipNested)),
+          void (noneOf "})") -- Consume anything EXCEPT the closing brace/paren of the parent
+        ]
+
 -- | A helper to parse and ignore statements that we don't care about.
 ignoredStatementParser :: SchemaParser ()
 ignoredStatementParser =
@@ -268,6 +313,7 @@ parseActionFile path = do
       ( (try ((ParsedFunction <$>) <$> registeredFunctionParser path))
           <|> (try ((ParsedType <$>) <$> registeredTypesParser))
           <|> (try (ignoredStatementParser >> return Nothing))
+          <|> (try (skippedExportParser >> return Nothing))
       )
   -- Keep only Just values and separate functions from types
   let (funcs, types) = foldr separate ([], []) results

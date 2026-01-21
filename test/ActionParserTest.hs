@@ -89,6 +89,7 @@ tests =
         runActionTest "parses public action with external type as VAny" "functions/stripe" sampleStripeSubscriptionActionPublic expectedStripeSubscriptionActionPublic,
         runActionTest "parses createAsset mutation with complex args" "functions/assets" sampleCreateAssetAction expectedCreateAssetAction,
         runActionTest "parses intersection types in args" "test/api" sampleIntersectionAction expectedIntersectionAction,
+        runActionTest "parses user query with structural return type" "functions/users" sampleQueryUsers expectedQueryUsers,
         runTypesParserTest "parses interface definition" sampleInterfaceDefinition expectedInterfaceFunction,
         runUnificationTest
           "unifies function return with named doc"
@@ -476,5 +477,47 @@ expectedInterfaceFunction =
           [ ("name", Schema.VString),
             ("email", Schema.VString)
           ]
+      }
+  ]
+
+sampleQueryUsers :: String
+sampleQueryUsers =
+  unlines
+    [ "export declare const getOrgs: import(\"convex/server\").RegisteredQuery<\"public\", {}, Promise<{",
+      "    name: string;",
+      "    _id: import(\"convex/values\").GenericId<\"memberships\">;",
+      "    _creationTime: number;",
+      "    user_id: import(\"convex/values\").GenericId<\"users\">;",
+      "    tenant_id: import(\"convex/values\").GenericId<\"tenants\">;",
+      "    roles: (\"viewer\" | \"user\" | \"admin\")[];",
+      "}[]>>;"
+    ]
+
+expectedQueryUsers :: [Action.ConvexFunction]
+expectedQueryUsers =
+  [ Action.ConvexFunction
+      { Action.funcName = "getOrgs",
+        Action.funcPath = "functions/users",
+        Action.funcType = Action.Query,
+        Action.funcArgs = [],
+        Action.funcReturn =
+          Schema.VArray
+            ( Schema.VObject
+                [ ("name", Schema.VString),
+                  ("_id", Schema.VId "memberships"),
+                  ("_creationTime", Schema.VNumber),
+                  ("user_id", Schema.VId "users"),
+                  ("tenant_id", Schema.VId "tenants"),
+                  ( "roles",
+                    Schema.VArray
+                      ( Schema.VUnion
+                          [ Schema.VLiteral "viewer",
+                            Schema.VLiteral "user",
+                            Schema.VLiteral "admin"
+                          ]
+                      )
+                  )
+                ]
+            )
       }
   ]
