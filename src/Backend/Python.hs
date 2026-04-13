@@ -91,6 +91,28 @@ generateHeader =
       ""
     ]
 
+toPayloadExpr :: String -> Schema.ConvexType -> String
+toPayloadExpr varName typ = case typ of
+  Schema.VString -> varName
+  Schema.VNumber -> varName
+  Schema.VInt64 -> varName ++ ".to_convex()"
+  Schema.VFloat64 -> varName
+  Schema.VBoolean -> varName
+  Schema.VBytes -> varName
+  Schema.VAny -> varName
+  Schema.VNull -> varName
+  Schema.VId _ -> varName
+  Schema.VLiteral _ -> varName
+  Schema.VVoid -> varName
+  Schema.VReference _ -> varName
+  Schema.VObject _ -> varName ++ ".to_convex()"
+  Schema.VArray inner ->
+    "[" ++ toPayloadExpr "item" inner ++ " for item in " ++ varName ++ "]"
+  Schema.VOptional inner ->
+    toPayloadExpr varName inner
+  Schema.VUnion _ ->
+    varName
+
 -- | Generates Python type aliases for all the named constants.
 generateAllConstants :: Map.Map String Schema.ConvexType -> [Definition]
 generateAllConstants constants =
@@ -133,7 +155,7 @@ generateTable table =
 
 pythonToConvex :: Int -> [(String, Schema.ConvexType)] -> [String]
 pythonToConvex baseIndent fields =
-  [ indent baseIndent $ "def to_convex(self) -> dict[str, Any]:",
+  [ indent baseIndent "def to_convex(self) -> dict[str, Any]:",
     indent (baseIndent + 1) "return {",
     unlines $ map (indent (baseIndent + 2) . append ',' . fieldToConvexMap) fields,
     indent (baseIndent + 1) "}"
@@ -141,14 +163,14 @@ pythonToConvex baseIndent fields =
   where
     append :: Char -> String -> String
     append c s = s ++ [c]
+
     fieldToConvexMap :: (String, Schema.ConvexType) -> String
-    fieldToConvexMap (fname, ctype) = "\"" ++ fname ++ "\" :" ++ fieldConversion
+    fieldToConvexMap (fname, ctype) =
+      "\"" ++ fname ++ "\" : " ++ toPayloadExpr fieldAccess ctype
       where
-        fieldConversion = case ctype of
-          Schema.VInt64 -> "self." ++ fieldNameSnake ++ ".to_convex()"
-          _ -> "self." ++ fieldNameSnake
         isSystemField = "_" `isPrefixOf` fname
         fieldNameSnake = if isSystemField then toSnakeCase (tail fname) else toSnakeCase fname
+        fieldAccess = "self." ++ fieldNameSnake
 
 -- | Generates singular type aliases for all table documents.
 generateAliases :: Schema.Schema -> String
@@ -162,7 +184,7 @@ generateAliases (Schema.Schema tables) =
 generateFunction :: Int -> Action.ConvexFunction -> (String, [Definition], Set.Set String)
 generateFunction level func =
   let funcName = Action.funcName func
-      (argSignature, payloadMapping, defsFromArgs, depsFromArgs) = generateArgSignature funcName (Action.funcArgs func)
+      (argSignature, payloadLines, defsFromArgs, depsFromArgs) = generateArgSignature funcName (Action.funcArgs func)
       funcNameSnake = toSnakeCase funcName
       (rawReturnHint, isModelReturn, defsFromReturn, depsFromReturn) = getReturnType funcName (Action.funcReturn func)
 
@@ -207,7 +229,8 @@ generateFunction level func =
         unlines
           [ indent level ("def " ++ funcNameSnake ++ "(self, " ++ argSignature ++ ") -> " ++ finalReturnHint ++ ":"),
             indent (level + 1) ("\"\"\"Wraps the " ++ fullFuncPath ++ " " ++ show (Action.funcType func) ++ ".\"\"\""),
-            indent (level + 1) ("payload: dict[str, Any] = {" ++ payloadMapping ++ "}"),
+            indent (level + 1) "payload: dict[str, Any] = {}",
+            unlines $ map (indent (level + 1)) payloadLines,
             indent (level + 1) "try:",
             tryBlock,
             indent (level + 1) "except ValidationError as e:",
@@ -222,7 +245,7 @@ generateFunction level func =
 generateSubscriptionFunction :: Int -> Action.ConvexFunction -> (String, [Definition], Set.Set String)
 generateSubscriptionFunction level func =
   let funcName = Action.funcName func
-      (argSignature, payloadMapping, defsFromArgs, depsFromArgs) = generateArgSignature funcName (Action.funcArgs func)
+      (argSignature, payloadLines, defsFromArgs, depsFromArgs) = generateArgSignature funcName (Action.funcArgs func)
       funcNameSnake = "subscribe_" ++ toSnakeCase funcName
       (returnHint, _, defsFromReturn, depsFromReturn) = getReturnType funcName (Action.funcReturn func)
       finalReturnHint = "Iterator[" ++ returnHint ++ "]"
@@ -235,7 +258,8 @@ generateSubscriptionFunction level func =
         unlines
           [ indent level ("def " ++ funcNameSnake ++ "(self, " ++ argSignature ++ ") -> " ++ finalReturnHint ++ ":"),
             indent (level + 1) ("\"\"\"Subscribes to the " ++ fullFuncPath ++ " query.\"\"\""),
-            indent (level + 1) ("payload: dict[str, Any] = {" ++ payloadMapping ++ "}"),
+            indent (level + 1) "payload: dict[str, Any] = {}",
+            unlines $ map (indent (level + 1)) payloadLines,
             indent (level + 1) ("raw_subscription = self._client.subscribe(" ++ fullFuncPath ++ ", payload)"),
             adapterCreation,
             indent (level + 1) "for raw_result in raw_subscription:",
@@ -294,15 +318,33 @@ generateApiClass funcs =
    in (apiDef, nestedDefs)
 
 -- Helper to generate Python function arguments and the payload dictionary mapping.
-generateArgSignature :: String -> [(String, Schema.ConvexType)] -> (String, String, [Definition], Set.Set String)
+generateArgSignature :: String -> [(String, Schema.ConvexType)] -> (String, [String], [Definition], Set.Set String)
 generateArgSignature funcName args =
-  let results = map (\(n, t) -> (n, toPythonTypeParts (capitalize funcName ++ capitalize n) t)) args
-      sigParts = map (\(n, (t, _, _, _, _)) -> toSnakeCase n ++ ": " ++ t) results
-      payloadParts = map (\(n, _) -> "\"" ++ n ++ "\": " ++ toSnakeCase n) results
-      nestedDefs = concatMap (\(_, (_, _, _, defs, _)) -> defs) results
-      deps = Set.unions $ map (\(_, (_, _, _, _, d)) -> d) results
+  let results = map (\(n, t) -> (n, t, toPythonTypeParts (capitalize funcName ++ capitalize n) t)) args
+      sigParts = map (\(n, _, (t, _, _, _, _)) -> toSnakeCase n ++ ": " ++ t) results
+      payloadLines = concatMap mkPayloadLines results
+      nestedDefs = concatMap (\(_, _, (_, _, _, defs, _)) -> defs) results
+      deps = Set.unions $ map (\(_, _, (_, _, _, _, d)) -> d) results
       argSignature = intercalate ", " sigParts
-   in (if length sigParts == 0 then argSignature else "*, " ++ argSignature, intercalate ", " payloadParts, nestedDefs, deps)
+   in ( if null sigParts then argSignature else "*, " ++ argSignature,
+        payloadLines,
+        nestedDefs,
+        deps
+      )
+  where
+    mkPayloadLines :: (String, Schema.ConvexType, (String, Bool, Bool, [Definition], Set.Set String)) -> [String]
+    mkPayloadLines (originalName, convexType, (_pyType, isOpt, _isArr, _nested, _deps)) =
+      let pyName = toSnakeCase originalName
+          payloadKey = "\"" ++ originalName ++ "\""
+          serializedExpr = toPayloadExpr pyName convexType
+       in if isOpt
+            then
+              [ "if " ++ pyName ++ " is not None:",
+                indent 1 $ "payload[" ++ payloadKey ++ "] = " ++ serializedExpr
+              ]
+            else
+              [ "payload[" ++ payloadKey ++ "] = " ++ serializedExpr
+              ]
 
 -- Helper to get the return type information.
 getReturnType :: String -> Schema.ConvexType -> (String, Bool, [Definition], Set.Set String)
