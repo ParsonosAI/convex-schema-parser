@@ -90,6 +90,7 @@ tests =
         runActionTest "parses createAsset mutation with complex args" "functions/assets" sampleCreateAssetAction expectedCreateAssetAction,
         runActionTest "parses intersection types in args" "test/api" sampleIntersectionAction expectedIntersectionAction,
         runActionTest "parses user query with structural return type" "functions/users" sampleQueryUsers expectedQueryUsers,
+        runActionTest "parses update mutation with optional id arg" "test/api" sampleUpdateMutation expectedUpdateMutation,
         runTypesParserTest "parses interface definition" sampleInterfaceDefinition expectedInterfaceFunction,
         runUnificationTest
           "unifies function return with named doc"
@@ -519,5 +520,34 @@ expectedQueryUsers =
                   )
                 ]
             )
+      }
+  ]
+
+sampleUpdateMutation :: String
+sampleUpdateMutation =
+  unlines
+    [ "export declare const update_and_create_group: import(\"convex/dist/esm-types/server\").RegisteredMutation<\"public\", {",
+      "    group_id?: import(\"convex/dist/esm-types/values\").GenericId<\"asset_groups\">;",
+      "    name: string;",
+      "    project_id: import(\"convex/dist/esm-types/values\").GenericId<\"projects\">;",
+      "    sort_index: number;",
+      "    secret: string;",
+      "}, Promise<Id<\"asset_groups\">>>;"
+    ]
+
+expectedUpdateMutation :: [Action.ConvexFunction]
+expectedUpdateMutation =
+  [ Action.ConvexFunction
+      { Action.funcName = "update_and_create_group",
+        Action.funcPath = "test/api",
+        Action.funcType = Action.Mutation,
+        Action.funcArgs =
+          [ ("group_id", Schema.VOptional (Schema.VId "asset_groups")),
+            ("name", Schema.VString),
+            ("project_id", Schema.VId "projects"),
+            ("sort_index", Schema.VNumber),
+            ("secret", Schema.VString)
+          ],
+        Action.funcReturn = Schema.VId "asset_groups"
       }
   ]

@@ -66,6 +66,7 @@ langDef =
           "boolean",
           "void",
           "GenericId",
+          "Id",
           "DefaultFunctionArgs",
           "ArrayBuffer",
           "bigint"
@@ -140,9 +141,9 @@ dtsTypeParser = do
         <|> (Schema.VAny <$ try (reserved "any"))
         <|> (Schema.VLiteral <$> try stringLiteral)
         <|> (Schema.VId <$> try genericIdParser)
+        <|> (Schema.VId <$> try bareIdParser)
         <|> (Schema.VObject <$> try (braces (sepEndBy dtsFieldParser (lexeme (char ';')))))
         <|> try (parens dtsTypeParser)
-        -- This is now the last option, which correctly handles all remaining identifiers.
         <|> qualifiedIdentifierParser
 
 -- A parser for a single field inside an argument or object type
@@ -168,6 +169,11 @@ genericIdParser = do
   void $ parens stringLiteral
   void $ lexeme $ char '.'
   void $ reserved "GenericId"
+  angles stringLiteral
+
+bareIdParser :: SchemaParser String
+bareIdParser = do
+  void $ lexeme $ string "Id"
   angles stringLiteral
 
 -- A parser for `import("...").DefaultFunctionArgs`
