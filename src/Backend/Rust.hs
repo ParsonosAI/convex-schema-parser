@@ -36,7 +36,7 @@ generateRustCode project =
       "// anyhow = \"1.0\"",
       "// futures-util = \"0.3\"",
       "",
-      generateRustModuleContent project
+      stripTrailingNewlines $ generateRustModuleContent project
     ]
 
 -- | Generates the entire content for a single Rust module file.
@@ -1008,6 +1008,7 @@ toClonedValueNonOptional varName t
 isComplexForBTreeMap :: Schema.ConvexType -> Bool
 isComplexForBTreeMap (Schema.VUnion _) = True
 isComplexForBTreeMap (Schema.VReference _) = True
+isComplexForBTreeMap (Schema.VLiteral _) = True
 isComplexForBTreeMap Schema.VAny = True
 isComplexForBTreeMap _ = False
 
@@ -1074,7 +1075,23 @@ toRustType nameHint typ = case typ of
                         ]
                  in ("types::" ++ enumName, [newEnum])
               else ("serde_json::Value", []) -- Fallback for complex unions
-  Schema.VLiteral _ -> (toPascalCase nameHint, [])
+  Schema.VLiteral literal ->
+    let enumName = toPascalCase nameHint
+        variantName = toPascalCase (Schema.sanitizeUnionValues literal)
+        fromBlock = generateFromConvexValueImplEnum ("types::" ++ enumName) [typ]
+        newEnum =
+          unlines
+            [ indent 1 "#[derive(Default, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]",
+              indent 1 ("pub enum " ++ enumName ++ " {"),
+              indent 2 "#[default]",
+              indent 2 ("#[serde(rename = \"" ++ literal ++ "\")]"),
+              indent 2 (variantName ++ ","),
+              indent 1 "}",
+              "",
+              fromBlock,
+              ""
+            ]
+     in ("types::" ++ enumName, [newEnum])
   Schema.VReference n -> ("types::" ++ toPascalCase n, [])
   Schema.VVoid -> ("()", [])
 
@@ -1113,3 +1130,6 @@ toSnakeCase (c : cs) = toLower c : go cs
 
 stripNewlines :: String -> String
 stripNewlines s = unlines . filter (/= "") $ lines s
+
+stripTrailingNewlines :: String -> String
+stripTrailingNewlines = reverse . dropWhile (== '\n') . reverse

@@ -91,6 +91,8 @@ tests =
         runActionTest "parses intersection types in args" "test/api" sampleIntersectionAction expectedIntersectionAction,
         runActionTest "parses user query with structural return type" "functions/users" sampleQueryUsers expectedQueryUsers,
         runActionTest "parses update mutation with optional id arg" "test/api" sampleUpdateMutation expectedUpdateMutation,
+        runActionTest "parses null in a return union" "test/api" sampleNullableReturn expectedNullableReturn,
+        runActionTest "parses undefined in an optional union" "test/api" sampleOptionalUndefined expectedOptionalUndefined,
         runTypesParserTest "parses interface definition" sampleInterfaceDefinition expectedInterfaceFunction,
         runUnificationTest
           "unifies function return with named doc"
@@ -159,6 +161,37 @@ expectedIntersectionAction =
             ("tenant_id", Schema.VId "tenants")
           ],
         Action.funcReturn = Schema.VId "projects"
+      }
+  ]
+
+sampleNullableReturn :: String
+sampleNullableReturn =
+  "export declare const getRevision: import(\"convex/server\").RegisteredQuery<\"public\", {}, Promise<number | null>>;"
+
+expectedNullableReturn :: [Action.ConvexFunction]
+expectedNullableReturn =
+  [ Action.ConvexFunction
+      { Action.funcName = "getRevision",
+        Action.funcPath = "test/api",
+        Action.funcType = Action.Query,
+        Action.funcArgs = [],
+        Action.funcReturn = Schema.VUnion [Schema.VNumber, Schema.VNull]
+      }
+  ]
+
+sampleOptionalUndefined :: String
+sampleOptionalUndefined =
+  "export declare const update: import(\"convex/server\").RegisteredMutation<\"public\", { valid?: boolean | undefined; }, Promise<void>>;"
+
+expectedOptionalUndefined :: [Action.ConvexFunction]
+expectedOptionalUndefined =
+  [ Action.ConvexFunction
+      { Action.funcName = "update",
+        Action.funcPath = "test/api",
+        Action.funcType = Action.Mutation,
+        Action.funcArgs =
+          [("valid", Schema.VOptional Schema.VBoolean)],
+        Action.funcReturn = Schema.VVoid
       }
   ]
 

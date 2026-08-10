@@ -6,7 +6,7 @@ import qualified Backend.Rust as Rust
 import qualified Convex.Action.Parser as Action
 import qualified Convex.Parser as Convex
 import qualified Convex.Schema.Parser as Schema
-import Data.List (isPrefixOf, tails)
+import Data.List (isPrefixOf, isSuffixOf, tails)
 import qualified Data.Map as Map
 import Test.HUnit
 import Text.Parsec (runParserT)
@@ -76,6 +76,32 @@ expectedComplexSerializationImpl =
       "}",
       "        Ok(Value::Object(btmap))",
       "    }",
+      "}"
+    ]
+
+createLiteralFunction :: Action.ConvexFunction
+createLiteralFunction =
+  Action.ConvexFunction
+    { Action.funcName = "createLiteral",
+      Action.funcPath = "documents",
+      Action.funcType = Action.Mutation,
+      Action.funcArgs =
+        [ ( "payload",
+            Schema.VObject
+              [ ("kind", Schema.VLiteral "localized")
+              ]
+          )
+        ],
+      Action.funcReturn = Schema.VVoid
+    }
+
+expectedLiteralEnum :: String
+expectedLiteralEnum =
+  unlines
+    [ "pub enum DocumentsCreateLiteralArgPayloadKind {",
+      "#[default]",
+      "#[serde(rename = \"localized\")]",
+      "Localized,",
       "}"
     ]
 
@@ -175,6 +201,20 @@ expectedGetAssetsSerializationImpl =
       "}"
     ]
 
+trailingNewlineTest :: Test
+trailingNewlineTest =
+  "generated module has exactly one trailing newline"
+    ~: TestCase $ do
+      let project =
+            Convex.ParsedProject
+              { Convex.ppConstants = Map.empty,
+                Convex.ppSchema = Schema.Schema {Schema.getTables = []},
+                Convex.ppFunctions = []
+              }
+          generatedCode = Rust.generateRustCode project
+      assertBool "Generated Rust contains a blank line at EOF" (not ("\n\n" `isSuffixOf` generatedCode))
+      assertBool "Generated Rust must end with a newline" ("\n" `isSuffixOf` generatedCode)
+
 -- Main test suite
 tests :: Test
 tests =
@@ -185,9 +225,14 @@ tests =
           complexCreateFunction
           expectedComplexSerializationImpl,
         runSerializationTest
+          "generates an enum for a literal object field"
+          createLiteralFunction
+          expectedLiteralEnum,
+        runSerializationTest
           "generates correct from_convex for getAssets function"
           getAssetsFunction
-          expectedGetAssetsSerializationImpl
+          expectedGetAssetsSerializationImpl,
+        trailingNewlineTest
       ]
 
 -- Helper to check for substring containment.

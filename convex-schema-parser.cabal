@@ -92,6 +92,7 @@ test-suite test-convex-parser
     other-modules:       ActionParserTest
         , ApiParserTest
         , SchemaParserTest
+        , PythonSerializationTest
         , RustSerializationTest
         , UnificationTest
     hs-source-dirs:      test

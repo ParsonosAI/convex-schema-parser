@@ -64,6 +64,8 @@ langDef =
           "string",
           "number",
           "boolean",
+          "null",
+          "undefined",
           "void",
           "GenericId",
           "Id",
@@ -136,6 +138,8 @@ dtsTypeParser = do
       (Schema.VString <$ try (reserved "string"))
         <|> (Schema.VNumber <$ try (reserved "number"))
         <|> (Schema.VBoolean <$ try (reserved "boolean"))
+        <|> (Schema.VNull <$ try (reserved "null"))
+        <|> (Schema.VVoid <$ try (reserved "undefined"))
         <|> (Schema.VBytes <$ try (reserved "ArrayBuffer"))
         <|> (Schema.VInt64 <$ try (reserved "bigint"))
         <|> (Schema.VAny <$ try (reserved "any"))
@@ -158,9 +162,21 @@ dtsFieldParser = lexeme $ do
   isOptional <- optionMaybe (lexeme (char '?'))
   void $ lexeme $ char ':'
   typ <- dtsTypeParser
-  -- If the `?` was present, wrap the final type in VOptional
-  let finalType = maybe typ (const $ Schema.VOptional typ) isOptional
+  let (containsUndefined, withoutUndefined) = removeUndefined typ
+      finalType =
+        if containsUndefined || maybe False (const True) isOptional
+          then Schema.VOptional withoutUndefined
+          else withoutUndefined
   return (name, finalType)
+  where
+    removeUndefined (Schema.VUnion types) =
+      let retained = filter (/= Schema.VVoid) types
+          normalized = case retained of
+            [singleType] -> singleType
+            _ -> Schema.VUnion retained
+       in (length retained /= length types, normalized)
+    removeUndefined Schema.VVoid = (True, Schema.VAny)
+    removeUndefined otherType = (False, otherType)
 
 -- A parser for `import("...").GenericId<"...">`
 genericIdParser :: SchemaParser String

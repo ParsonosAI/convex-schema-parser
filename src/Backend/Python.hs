@@ -83,6 +83,10 @@ generateHeader =
       "    def to_convex(self) -> ConvexInt64:",
       "        return ConvexInt64(self.value)",
       "",
+      "def _to_convex(value: Any) -> Any:",
+      "    converter = getattr(value, 'to_convex', None)",
+      "    return converter() if converter is not None else value",
+      "",
       "T = TypeVar('T')",
       "class Id(str, Generic[T]):",
       "    @classmethod",
@@ -104,14 +108,14 @@ toPayloadExpr varName typ = case typ of
   Schema.VId _ -> varName
   Schema.VLiteral _ -> varName
   Schema.VVoid -> varName
-  Schema.VReference _ -> varName
+  Schema.VReference _ -> "_to_convex(" ++ varName ++ ")"
   Schema.VObject _ -> varName ++ ".to_convex()"
   Schema.VArray inner ->
     "[" ++ toPayloadExpr "item" inner ++ " for item in " ++ varName ++ "]"
   Schema.VOptional inner ->
     toPayloadExpr varName inner
   Schema.VUnion _ ->
-    varName
+    "_to_convex(" ++ varName ++ ")"
 
 -- | Generates Python type aliases for all the named constants.
 generateAllConstants :: Map.Map String Schema.ConvexType -> [Definition]
@@ -211,10 +215,7 @@ generateFunction level func =
                   else "raw_result: " ++ hint ++ " = "
               validationLogic =
                 if isModelReturn
-                  then
-                    if "list[" `isPrefixOf` rawReturnHint
-                      then "TypeAdapter(" ++ rawReturnHint ++ ").validate_python(raw_result)"
-                      else rawReturnHint ++ ".model_validate(raw_result)"
+                  then "TypeAdapter(" ++ rawReturnHint ++ ").validate_python(raw_result)"
                   else "raw_result"
               body =
                 unlines
@@ -350,13 +351,16 @@ generateArgSignature funcName args =
 getReturnType :: String -> Schema.ConvexType -> (String, Bool, [Definition], Set.Set String)
 getReturnType funcName rt =
   let (pyType, _, _, nestedDefs, deps) = toPythonTypeParts (capitalize funcName ++ "Return") rt
-      isModel = case rt of
-        Schema.VObject _ -> True
-        Schema.VArray (Schema.VObject _) -> True
-        Schema.VReference _ -> True
-        Schema.VArray (Schema.VReference _) -> True
-        _ -> False
+      isModel = containsModel rt
    in (pyType, isModel, nestedDefs, deps)
+  where
+    containsModel convexType = case convexType of
+      Schema.VObject _ -> True
+      Schema.VReference _ -> True
+      Schema.VArray inner -> containsModel inner
+      Schema.VOptional inner -> containsModel inner
+      Schema.VUnion unionTypes -> any containsModel unionTypes
+      _ -> False
 
 -- Helper to generate a single field line for a Pydantic model.
 generateField :: String -> Schema.Field -> (String, [Definition], Set.Set String)
@@ -396,7 +400,7 @@ toPythonTypeParts nameHint typ = case typ of
     let (innerType, _, innerIsArray, nested, deps) = toPythonTypeParts nameHint inner
      in (innerType ++ " | None", True, innerIsArray, nested, deps)
   Schema.VUnion types ->
-    let results = map (toPythonTypeParts nameHint) types
+    let results = zipWith (\index unionType -> toPythonTypeParts (nameHint ++ "Variant" ++ show index) unionType) [1 :: Int ..] types
         pyTypes = nub $ map (\(t, _, _, _, _) -> t) results
         nested = concatMap (\(_, _, _, d, _) -> d) results
         deps = Set.unions $ map (\(_, _, _, _, d) -> d) results

@@ -2,6 +2,7 @@ module Main (main) where
 
 import qualified ActionParserTest
 import qualified ApiParserTest
+import qualified PythonSerializationTest
 import qualified RustSerializationTest
 import qualified SchemaParserTest
 import qualified UnificationTest
@@ -16,6 +17,7 @@ main = do
           [ ApiParserTest.tests,
             ActionParserTest.tests,
             SchemaParserTest.tests,
+            PythonSerializationTest.tests,
             RustSerializationTest.tests,
             UnificationTest.tests
           ]
