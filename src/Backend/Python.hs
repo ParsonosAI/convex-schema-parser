@@ -392,7 +392,10 @@ toPythonTypeParts nameHint typ = case typ of
   Schema.VBytes -> ("bytes", False, False, [], Set.empty)
   Schema.VAny -> ("Any", False, False, [], Set.empty)
   Schema.VNull -> ("None", True, False, [], Set.empty)
-  Schema.VId t -> ("Id['" ++ toClassName t ++ "']", False, False, [], Set.singleton (toClassName t))
+  -- Id[T] is a phantom typed string: the generated model does not embed or
+  -- validate a T instance, so mutually referencing table IDs do not impose a
+  -- class-definition ordering dependency.
+  Schema.VId t -> ("Id['" ++ toClassName t ++ "']", False, False, [], Set.empty)
   Schema.VArray inner ->
     let (innerType, isOpt, isArr, nested, deps) = toPythonTypeParts nameHint inner
      in ("list[" ++ innerType ++ "]", isOpt, isArr, nested, deps)

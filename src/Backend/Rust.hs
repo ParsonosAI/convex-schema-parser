@@ -165,7 +165,7 @@ generateIdStruct =
       "impl<T> TryFrom<Value> for Id<T> {",
       indent 1 "type Error = ApiError;",
       "",
-      indent 1 "fn try_from(value: Value) -> Result<Self, Self::Error> {",
+      indent 1 "fn try_from(value: Value) -> Result<Self, ApiError> {",
       indent 2 "if let Value::String(id) = value {",
       indent 3 "Ok(Id::new(id))",
       indent 2 "} else {",
@@ -666,7 +666,7 @@ generateFromConvexValueImplEnum structName fields =
   unlines
     [ "impl TryFrom<Value> for " ++ structName ++ " {",
       indent 1 "type Error = ApiError;",
-      indent 1 "fn try_from(value: Value) -> Result<Self, Self::Error> {",
+      indent 1 "fn try_from(value: Value) -> Result<Self, ApiError> {",
       indent 2 "if let Value::String(s) = &value {",
       indent 3 "return match s.as_str() {",
       unlines . map (indent 4) $ generateEnumMatchCases structName fields,
@@ -724,7 +724,7 @@ generateFromConvexValueImpl structName fields =
   unlines
     [ "impl TryFrom<Value> for " ++ structName ++ " {",
       indent 1 "type Error = ApiError;",
-      indent 1 "fn try_from(value: Value) -> Result<Self, Self::Error> {",
+      indent 1 "fn try_from(value: Value) -> Result<Self, ApiError> {",
       indent 2 "let obj = match value {",
       indent 3 "Value::Object(map) => map,",
       indent 3 "_ => return Err(ApiError::ConvexClientError(\"Expected object\".to_string())),",
@@ -1048,13 +1048,15 @@ toRustType nameHint typ = case typ of
      in ("types::" ++ className, concat nestedFields ++ [newModel])
   Schema.VUnion types ->
     let nonNullTypes = filter (/= Schema.VNull) types
+        hasNull = Schema.VNull `elem` types
+        optionalize rustType = if hasNull then "Option<" ++ rustType ++ ">" else rustType
      in case nonNullTypes of
           [] -> ("Option<()>", [])
           [singleType] ->
             let (innerType, nested) = toRustType nameHint singleType
-             in ("Option<" ++ innerType ++ ">", nested)
+             in (optionalize innerType, nested)
           _ ->
-            if all Schema.isLiteral nonNullTypes && not (null nonNullTypes)
+            if all Schema.isLiteral nonNullTypes
               then
                 let enumName = toPascalCase nameHint
                     variantNames = map Schema.getLiteralString nonNullTypes
@@ -1073,8 +1075,8 @@ toRustType nameHint typ = case typ of
                           fromBlock,
                           ""
                         ]
-                 in ("types::" ++ enumName, [newEnum])
-              else ("serde_json::Value", []) -- Fallback for complex unions
+                 in (optionalize ("types::" ++ enumName), [newEnum])
+              else (optionalize "serde_json::Value", []) -- Fallback for complex unions
   Schema.VLiteral literal ->
     let enumName = toPascalCase nameHint
         variantName = toPascalCase (Schema.sanitizeUnionValues literal)

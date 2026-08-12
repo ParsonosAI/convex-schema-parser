@@ -162,7 +162,7 @@ expectedGetAssetsSerializationImpl =
   unlines
     [ "impl TryFrom<Value> for GetAssetsReturnObject {",
       "    type Error = ApiError;",
-      "    fn try_from(value: Value) -> Result<Self, Self::Error> {",
+      "    fn try_from(value: Value) -> Result<Self, ApiError> {",
       "        let obj = match value {",
       "            Value::Object(map) => map,",
       "            _ => return Err(ApiError::ConvexClientError(\"Expected object\".to_string())),",
@@ -227,6 +227,67 @@ expectedGetAssetsSerializationImpl =
       "}"
     ]
 
+nullableUnionReturnFunction :: Action.ConvexFunction
+nullableUnionReturnFunction =
+  Action.ConvexFunction
+    { Action.funcName = "getPreparation",
+      Action.funcPath = "scriptPreparation",
+      Action.funcType = Action.Query,
+      Action.funcArgs = [],
+      Action.funcReturn =
+        Schema.VObject
+          [ ( "outcome",
+              Schema.VUnion
+                [ Schema.VLiteral "complete",
+                  Schema.VLiteral "partial",
+                  Schema.VNull
+                ]
+            ),
+            ( "suggested_content",
+              Schema.VUnion
+                [ Schema.VObject [("kind", Schema.VLiteral "character")],
+                  Schema.VObject [("kind", Schema.VLiteral "special_word")],
+                  Schema.VNull
+                ]
+            )
+          ]
+    }
+
+nullableUnionReturnTest :: Test
+nullableUnionReturnTest = "preserves Option wrappers for nullable unions" ~: TestCase $ do
+  let project =
+        Convex.ParsedProject
+          { Convex.ppConstants = Map.empty,
+            Convex.ppSchema = Schema.Schema {Schema.getTables = []},
+            Convex.ppFunctions = [nullableUnionReturnFunction]
+          }
+      generated = Rust.generateRustCode project
+  assertBool
+    "Nullable literal union lost its Option wrapper"
+    ("pub outcome: Option<types::GetPreparationReturnOutcome>" `isInfixOf` generated)
+  assertBool
+    "Nullable complex union lost its Option wrapper"
+    ("pub suggested_content: Option<serde_json::Value>" `isInfixOf` generated)
+
+enumErrorVariantTest :: Test
+enumErrorVariantTest = "literal Error variant does not conflict with TryFrom Error" ~: TestCase $ do
+  let project =
+        Convex.ParsedProject
+          { Convex.ppConstants =
+              Map.fromList
+                [ ( "DiagnosticSeverity",
+                    Schema.VUnion [Schema.VLiteral "warning", Schema.VLiteral "error"]
+                  )
+                ],
+            Convex.ppSchema = Schema.Schema {Schema.getTables = []},
+            Convex.ppFunctions = []
+          }
+      generated = Rust.generateRustCode project
+  assertBool "Expected the Error enum variant" ("Error," `isInfixOf` generated)
+  assertBool
+    "TryFrom uses an ambiguous associated Error type"
+    ("fn try_from(value: Value) -> Result<Self, ApiError>" `isInfixOf` generated)
+
 trailingNewlineTest :: Test
 trailingNewlineTest =
   "generated module has exactly one trailing newline"
@@ -262,6 +323,8 @@ tests =
           "generates correct from_convex for getAssets function"
           getAssetsFunction
           expectedGetAssetsSerializationImpl,
+        nullableUnionReturnTest,
+        enumErrorVariantTest,
         trailingNewlineTest
       ]
 

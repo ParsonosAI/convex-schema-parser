@@ -82,5 +82,44 @@ testDistinctUnionModels = "generates distinct models for object union branches" 
     "TypeAdapter(list[Upsert_proofing_notesReturnVariant1Object | Upsert_proofing_notesReturnVariant2Object]).validate_python(raw_result)"
     generated
 
+testMutuallyReferencingTableIds :: Test
+testMutuallyReferencingTableIds = "generates mutually referencing table IDs" ~: TestCase $ do
+  let project =
+        Convex.ParsedProject
+          { Convex.ppConstants = Map.empty,
+            Convex.ppSchema =
+              Schema.Schema
+                { Schema.getTables =
+                    [ Schema.Table
+                        { Schema.tableName = "projects",
+                          Schema.tableFields =
+                            [ Schema.Field
+                                "script_preparation_id"
+                                (Schema.VOptional (Schema.VId "script_preparations"))
+                            ],
+                          Schema.tableIndexes = []
+                        },
+                      Schema.Table
+                        { Schema.tableName = "script_preparations",
+                          Schema.tableFields =
+                            [Schema.Field "project_id" (Schema.VId "projects")],
+                          Schema.tableIndexes = []
+                        }
+                    ]
+                },
+            Convex.ppFunctions = []
+          }
+      generated = Python.generatePythonCode project
+
+  assertContains
+    "script_preparation_id: Id['Script_preparationsDoc'] | None = Field(default=None)"
+    generated
+  assertContains "project_id: Id['ProjectsDoc'] = Field(...)" generated
+
 tests :: Test
-tests = "Python Serialization" ~: TestList [testDistinctUnionModels]
+tests =
+  "Python Serialization"
+    ~: TestList
+      [ testDistinctUnionModels,
+        testMutuallyReferencingTableIds
+      ]
