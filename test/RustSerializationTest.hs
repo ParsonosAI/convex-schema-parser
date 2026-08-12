@@ -105,6 +105,32 @@ expectedLiteralEnum =
       "}"
     ]
 
+createVersionLiteralFunction :: Action.ConvexFunction
+createVersionLiteralFunction =
+  Action.ConvexFunction
+    { Action.funcName = "createVersionLiteral",
+      Action.funcPath = "documents",
+      Action.funcType = Action.Mutation,
+      Action.funcArgs =
+        [ ( "payload",
+            Schema.VObject
+              [ ("schema_version", Schema.VLiteral "1.0")
+              ]
+          )
+        ],
+      Action.funcReturn = Schema.VVoid
+    }
+
+expectedVersionLiteralEnum :: String
+expectedVersionLiteralEnum =
+  unlines
+    [ "pub enum DocumentsCreateVersionLiteralArgPayloadSchemaVersion {",
+      "#[default]",
+      "#[serde(rename = \"1.0\")]",
+      "Value10,",
+      "}"
+    ]
+
 getAssetsFunction :: Action.ConvexFunction
 getAssetsFunction =
   Action.ConvexFunction
@@ -228,6 +254,10 @@ tests =
           "generates an enum for a literal object field"
           createLiteralFunction
           expectedLiteralEnum,
+        runSerializationTest
+          "sanitizes punctuation and leading digits in literal enum variants"
+          createVersionLiteralFunction
+          expectedVersionLiteralEnum,
         runSerializationTest
           "generates correct from_convex for getAssets function"
           getAssetsFunction

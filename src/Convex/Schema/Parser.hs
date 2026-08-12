@@ -19,6 +19,7 @@ module Convex.Schema.Parser
 where
 
 import Control.Monad
+import Data.Char (isAlphaNum, isLetter)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Debug.Trace (trace)
@@ -393,7 +394,13 @@ convexTypeCore =
 -- And `application/pdf` would be translated into a type `Application/pdf`, which
 -- is invalid in most languages. After sanitization, it would become `application_pdf`.
 sanitizeUnionValues :: String -> String
-sanitizeUnionValues = concatMap (\c -> if c `elem` ['/', '@', '\\'] then ['_'] else [c])
+sanitizeUnionValues value =
+  let replaced = map (\c -> if isAlphaNum c then c else '_') value
+   in case replaced of
+        [] -> "Value"
+        first : _
+          | isLetter first -> replaced
+          | otherwise -> "Value_" ++ replaced
 
 topLevelConstParser :: SchemaParser ()
 topLevelConstParser = lexeme $ do
