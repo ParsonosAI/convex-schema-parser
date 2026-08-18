@@ -129,7 +129,7 @@ parseProject schemaPath declRootDir = do
 
   parseProjectFromContents schemaContent apiFileContent actionContents
 
-type UnionSignatureMap = Map.Map [String] String
+type UnionSignatureMap = Map.Map Schema.ConvexType String
 
 type ObjectSignatureMap = Map.Map [(String, Schema.ConvexType)] String
 
@@ -180,9 +180,8 @@ toPascalCase (h : t) = toUpper h : t
 buildUnionSignatureMap :: Map.Map String Schema.ConvexType -> UnionSignatureMap
 buildUnionSignatureMap constants =
   Map.fromList
-    [ (sort $ map Schema.getLiteralString literals, name)
-    | (name, Schema.VUnion literals) <- Map.toList constants,
-      all Schema.isLiteral literals
+    [ (canonicalizeType (Schema.VUnion variants), name)
+    | (name, Schema.VUnion variants) <- Map.toList constants
     ]
 
 buildObjectSignatureMap :: Map.Map String Schema.ConvexType -> ObjectSignatureMap
@@ -204,18 +203,14 @@ unifyTypeRecursively mCurrentName unionMap objectMap = go
   where
     goRec = unifyTypeRecursively Nothing unionMap objectMap
 
-    go u@(Schema.VUnion literals)
-      | all Schema.isLiteral literals =
-          let signature = sort $ map Schema.getLiteralString literals
-           in case Map.lookup signature unionMap of
-                Just refName ->
-                  if Just refName == mCurrentName
-                    then canonicalizeType u
-                    else Schema.VReference refName
-                Nothing -> canonicalizeType u
-      | otherwise =
-          let unifiedUnion = Schema.VUnion (map goRec literals)
-           in canonicalizeType unifiedUnion
+    go (Schema.VUnion variants) =
+      let canonicalUnion = canonicalizeType (Schema.VUnion (map goRec variants))
+       in case Map.lookup canonicalUnion unionMap of
+            Just refName ->
+              if Just refName == mCurrentName
+                then canonicalUnion
+                else Schema.VReference refName
+            Nothing -> canonicalUnion
     go (Schema.VObject fields) =
       let unifiedFields = map (\(name, t) -> (name, goRec t)) fields
           canonicalAttempt = canonicalizeType (Schema.VObject unifiedFields)

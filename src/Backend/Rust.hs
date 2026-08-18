@@ -322,6 +322,15 @@ generateFromConvexValueBoilerplate =
       "        Ok(value.into())",
       "    }",
       "}",
+      "",
+      "impl FromConvexValue for () {",
+      "    fn from_convex(value: Value) -> Result<Self, ApiError> {",
+      "        match value {",
+      "            Value::Null => Ok(()),",
+      "            _ => Err(ApiError::ConvexClientError(\"Expected null\".into())),",
+      "        }",
+      "    }",
+      "}",
       ""
     ]
 
@@ -544,7 +553,9 @@ generateConstant name u@(Schema.VUnion literals)
               ]
        in (code, [])
   | otherwise =
-      let (rustTypeName, nested) = toRustType name u
+      -- Keep the public constant alias distinct from the generated enum name;
+      -- using the same hint would produce a recursive `type T = types::T`.
+      let (rustTypeName, nested) = toRustType (name ++ "_value") u
        in (indent 1 ("pub type " ++ toPascalCase name ++ " = " ++ rustTypeName ++ ";"), nested)
 generateConstant name t =
   let (rustTypeName, nested) = toRustType name t
@@ -552,7 +563,7 @@ generateConstant name t =
 
 generateField :: String -> Schema.Field -> (String, [String])
 generateField nameHint field =
-  let fieldNameSnake = toSnakeCase (Schema.fieldName field)
+  let fieldNameSnake = toRustFieldName (Schema.fieldName field)
       (rustType, nested) = toRustType (nameHint ++ capitalize (Schema.fieldName field)) (Schema.fieldType field)
       serdeRename = if fieldNameSnake /= Schema.fieldName field then indent 2 ("#[serde(rename = \"" ++ Schema.fieldName field ++ "\")]\n") else ""
       serdeAttrs =
@@ -579,7 +590,7 @@ generateBTreeMap :: [(String, Schema.ConvexType)] -> String
 generateBTreeMap [] = indent 2 "let btmap = BTreeMap::new();"
 generateBTreeMap btmap =
   let buildStmts (name, convexType) =
-        let varName = "arg." ++ toSnakeCase name
+        let varName = "arg." ++ toRustFieldName name
          in case convexType of
               Schema.VObject _ -> indent 1 ("btmap.insert(\"" ++ name ++ "\".to_string(), " ++ varName ++ ".to_convex_value()?);")
               Schema.VOptional innerConvexType -> indent 1 ("if let Some(v) = " ++ varName ++ " { btmap.insert(\"" ++ name ++ "\".to_string(), " ++ fieldToConvexValue ("v", innerConvexType) ++ "); }")
@@ -745,14 +756,16 @@ generateFromConvexValueImpl structName fields =
 generateFromConvexValueResult :: String -> [(String, Schema.ConvexType)] -> [String]
 generateFromConvexValueResult structName fields =
   let fieldNames = map (toSnakeCase . fst) fields
+      rustFieldNames = map (toRustFieldName . fst) fields
       fieldAccessors = map (\name -> "get_" ++ name) fieldNames
       setterStatements =
-        zipWith
-          ( \name getter -> case name of
+        zipWith3
+          ( \originalName rustName getter -> case originalName of
               "_creation_time" -> indent 3 $ "_creation_time: " ++ getter ++ "(&obj, \"_creationTime\")?"
-              n -> indent 3 $ n ++ ": " ++ getter ++ "(&obj, \"" ++ n ++ "\")?"
+              _ -> indent 3 $ rustName ++ ": " ++ getter ++ "(&obj, \"" ++ originalName ++ "\")?"
           )
           fieldNames
+          rustFieldNames
           fieldAccessors
    in [ indent 2 ("Ok(" ++ structName ++ " {"),
         indent 3 $ intercalate ",\n" $ setterStatements,
@@ -945,7 +958,7 @@ generateAccessorFnFromConvexValue structName (fieldName, fieldType) =
 
 generateFieldToConvexValue :: (String, Schema.ConvexType) -> String
 generateFieldToConvexValue (fieldName, Schema.VOptional inner) =
-  let fieldNameSnake = toSnakeCase fieldName
+  let fieldNameSnake = toRustFieldName fieldName
       -- `v` is the unwrapped value from the Option.
       valueExpr = innerValueToConvexOptional "v" inner
    in unlines
@@ -954,7 +967,7 @@ generateFieldToConvexValue (fieldName, Schema.VOptional inner) =
           "}"
         ]
 generateFieldToConvexValue (fieldName, fieldType) =
-  let fieldNameSnake = toSnakeCase fieldName
+  let fieldNameSnake = toRustFieldName fieldName
       valueExpr = innerValueToConvexNonOptional ("self." ++ fieldNameSnake) fieldType
    in "btmap.insert(\"" ++ fieldName ++ "\".to_string(), " ++ valueExpr ++ ");"
 
@@ -1009,6 +1022,8 @@ isComplexForBTreeMap :: Schema.ConvexType -> Bool
 isComplexForBTreeMap (Schema.VUnion _) = True
 isComplexForBTreeMap (Schema.VReference _) = True
 isComplexForBTreeMap (Schema.VLiteral _) = True
+isComplexForBTreeMap Schema.VNull = True
+isComplexForBTreeMap Schema.VVoid = True
 isComplexForBTreeMap Schema.VAny = True
 isComplexForBTreeMap _ = False
 
@@ -1076,7 +1091,51 @@ toRustType nameHint typ = case typ of
                           ""
                         ]
                  in (optionalize ("types::" ++ enumName), [newEnum])
-              else (optionalize "serde_json::Value", []) -- Fallback for complex unions
+              else
+                let enumName = toPascalCase nameHint
+                    variantName index (Schema.VObject fields) =
+                      case lookup "kind" fields of
+                        Just (Schema.VLiteral kind) -> toPascalCase (Schema.sanitizeUnionValues kind) ++ "Variant" ++ show index
+                        _ -> "Variant" ++ show index
+                    variantName index _ = "Variant" ++ show index
+                    buildVariant index variantType =
+                      let name = variantName index variantType
+                          (rustType, variantNestedTypes) = toRustType (nameHint ++ name) variantType
+                       in ((name, rustType), variantNestedTypes)
+                    builtVariants = zipWith buildVariant [1 :: Int ..] nonNullTypes
+                    variants = map fst builtVariants
+                    nestedTypes = concatMap snd builtVariants
+                    variantLines =
+                      [ indent 2 (variantName' ++ "(" ++ rustType ++ "),")
+                      | (variantName', rustType) <- variants
+                      ]
+                    (defaultVariant, defaultType) =
+                      case variants of
+                        firstVariant : _ -> firstVariant
+                        [] -> error "complex union unexpectedly has no non-null variants"
+                    newEnum =
+                      unlines
+                        [ indent 1 "#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]",
+                          indent 1 "#[serde(untagged)]",
+                          indent 1 ("pub enum " ++ enumName ++ " {"),
+                          unlines variantLines,
+                          indent 1 "}",
+                          "",
+                          indent 1 ("impl Default for " ++ enumName ++ " {"),
+                          indent 2 "fn default() -> Self {",
+                          indent 3 ("Self::" ++ defaultVariant ++ "(<" ++ defaultType ++ ">::default())"),
+                          indent 2 "}",
+                          indent 1 "}",
+                          "",
+                          indent 1 ("impl FromConvexValue for types::" ++ enumName ++ " {"),
+                          indent 2 "fn from_convex(value: Value) -> Result<Self, ApiError> {",
+                          indent 3 "let json_value: serde_json::Value = value.into();",
+                          indent 3 ("serde_json::from_value(json_value).map_err(|error| ApiError::ConvexClientError(format!(\"Failed to deserialize " ++ enumName ++ ": {error}\")))"),
+                          indent 2 "}",
+                          indent 1 "}",
+                          ""
+                        ]
+                 in (optionalize ("types::" ++ enumName), nestedTypes ++ [newEnum])
   Schema.VLiteral literal ->
     let enumName = toPascalCase nameHint
         variantName = toPascalCase (Schema.sanitizeUnionValues literal)
@@ -1120,6 +1179,21 @@ toPascalCase s = concatMap capitalize parts
 capitalize :: String -> String
 capitalize "" = ""
 capitalize (c : cs) = toUpper c : cs
+
+toRustFieldName :: String -> String
+toRustFieldName name =
+  let snakeName = toSnakeCase name
+   in if snakeName `elem` rustKeywords then "r#" ++ snakeName else snakeName
+  where
+    rustKeywords =
+      [ "as", "async", "await", "break", "const", "continue", "crate", "dyn",
+        "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in",
+        "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
+        "self", "Self", "static", "struct", "super", "trait", "true", "type",
+        "union", "unsafe", "use", "where", "while", "abstract", "become", "box",
+        "do", "final", "macro", "override", "priv", "try", "typeof", "unsized",
+        "virtual", "yield"
+      ]
 
 toSnakeCase :: String -> String
 toSnakeCase "" = ""

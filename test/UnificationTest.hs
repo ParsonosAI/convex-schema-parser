@@ -183,6 +183,47 @@ testUnifyWithDeeplyNestedObject = "unifies function return with deeply nested ob
             ]
        in Parser.ppFunctions project @?= expected
 
+testUnifyWithNamedComplexUnion :: Test
+testUnifyWithNamedComplexUnion = "unifies function arguments with named complex unions" ~: TestCase $ do
+  let schemaContent =
+        unlines
+          [ "import { defineSchema } from \"convex/server\";",
+            "import { v } from \"convex/values\";",
+            "export const result_value_validator = v.union(",
+            "  v.object({ kind: v.literal(\"text\"), text: v.string() }),",
+            "  v.object({ kind: v.literal(\"count\"), count: v.number() })",
+            ");",
+            "export const result_update_validator = v.object({",
+            "  key: v.string(),",
+            "  value: result_value_validator",
+            "});",
+            "export default defineSchema({});"
+          ]
+  let apiFileContent =
+        unlines
+          [ "declare const fullApi: ApiFromModules<{",
+            "  \"myActions\": typeof myActions;",
+            "}>;"
+          ]
+  let actionContent =
+        "export declare const upsert: import(\"convex/server\").RegisteredMutation<\"public\", { updates: { key: string; value: { kind: \"text\"; text: string; } | { kind: \"count\"; count: number; }; }[]; }, Promise<void>>;"
+
+  result <- Parser.parseProjectFromContents schemaContent apiFileContent [("myActions", actionContent)]
+  case result of
+    Left err -> assertFailure ("Parser failed: " ++ show err)
+    Right project ->
+      let expected =
+            [ Action.ConvexFunction
+                { Action.funcName = "upsert",
+                  Action.funcPath = "myActions",
+                  Action.funcType = Action.Mutation,
+                  Action.funcArgs =
+                    [("updates", Schema.VArray (Schema.VReference "result_update_validator"))],
+                  Action.funcReturn = Schema.VVoid
+                }
+            ]
+       in Parser.ppFunctions project @?= expected
+
 tests :: Test
 tests =
   "Unification"
@@ -191,7 +232,8 @@ tests =
         testUnifyWithNestedObject,
         testUnifyWithArrayOfDocs,
         testUnifyWithDeeplyNestedObject,
-        testUnifyWithShuffledFields
+        testUnifyWithShuffledFields,
+        testUnifyWithNamedComplexUnion
       ]
 
 testUnifyWithShuffledFields :: Test

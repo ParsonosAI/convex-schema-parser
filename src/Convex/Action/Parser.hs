@@ -64,6 +64,9 @@ langDef =
           "string",
           "number",
           "boolean",
+          "true",
+          "false",
+          "never",
           "null",
           "undefined",
           "void",
@@ -105,13 +108,13 @@ angles p = lexeme (char '<') *> p <* lexeme (char '>')
 
 dtsTypeParser :: SchemaParser Schema.ConvexType
 dtsTypeParser = do
-  -- A type can be a union of other types
+  -- TypeScript postfix arrays bind more tightly than intersections and unions:
+  -- `string[] | undefined` means `(string[]) | undefined`, while
+  -- `(string | number)[]` remains expressible through the parenthesized parser.
   unions <- sepBy1 intersectionTypeParser (lexeme (char '|'))
-  let baseType = if length unions == 1 then head unions else Schema.VUnion unions
-  -- After parsing the base type, check for array suffixes `[]`
-  arrayCount <- length <$> many (lexeme (string "[]"))
-  -- Wrap the base type in VArray for each `[]` found
-  return $ foldr (\_ acc -> Schema.VArray acc) baseType (replicate arrayCount ())
+  return $ case unions of
+    [single] -> single
+    _ -> Schema.VUnion unions
   where
     -- Parses both single identifiers (like `RoleEnum`)
     -- and qualified identifiers (like `Stripe.Subscription`).
@@ -124,20 +127,28 @@ dtsTypeParser = do
         else -- Otherwise, it's a single-word identifier, treat as a reference.
           return (Schema.VReference (head parts))
 
-    -- intersection of atomic types, e.g. `string & { _: "isbn" }`
+    -- intersection of postfix types, e.g. `string & { _: "isbn" }`
     intersectionTypeParser :: SchemaParser Schema.ConvexType
     intersectionTypeParser = do
-      parts <- sepBy1 singleType (lexeme (char '&'))
+      parts <- sepBy1 postfixTypeParser (lexeme (char '&'))
       -- We deliberately ignore all but the first component, to drop branding like:
       --   string & { _: "isbn" }
       -- and just keep the base type (`string`).
       -- If you ever need smarter logic, you can refine this combine function.
       return (head parts)
 
+    postfixTypeParser = do
+      baseType <- singleType
+      arrayCount <- length <$> many (lexeme (string "[]"))
+      return $ foldr (\_ acc -> Schema.VArray acc) baseType (replicate arrayCount ())
+
     singleType =
       (Schema.VString <$ try (reserved "string"))
         <|> (Schema.VNumber <$ try (reserved "number"))
         <|> (Schema.VBoolean <$ try (reserved "boolean"))
+        <|> (Schema.VBoolean <$ try (reserved "true"))
+        <|> (Schema.VBoolean <$ try (reserved "false"))
+        <|> (Schema.VAny <$ try (reserved "never"))
         <|> (Schema.VNull <$ try (reserved "null"))
         <|> (Schema.VVoid <$ try (reserved "undefined"))
         <|> (Schema.VBytes <$ try (reserved "ArrayBuffer"))
@@ -202,25 +213,30 @@ defaultFuncArgsParser = do
 
 registeredFunctionParser :: String -> SchemaParser (Maybe ConvexFunction)
 registeredFunctionParser fPath = lexeme $ do
-  optional (try (lexeme (string "/**") *> manyTill anyChar (try (string "*/"))))
-  whiteSpace
+  -- Backtrack only while recognizing the declaration header. Once a known
+  -- Registered* export is recognized, malformed or unsupported types must be
+  -- reported rather than silently consumed by skippedExportParser.
+  (fName, fTypeStr) <- try $ do
+    optional (try (lexeme (string "/**") *> manyTill anyChar (try (string "*/"))))
+    whiteSpace
 
-  reserved "export"
-  reserved "declare"
-  reserved "const"
-  fName <- identifier
-  void $ lexeme $ char ':'
+    reserved "export"
+    reserved "declare"
+    reserved "const"
+    parsedName <- identifier
+    void $ lexeme $ char ':'
 
-  void $ reserved "import"
-  void $ parens stringLiteral
-  void $ lexeme $ char '.'
+    void $ reserved "import"
+    void $ parens stringLiteral
+    void $ lexeme $ char '.'
 
-  fTypeStr <-
-    choice
-      [ try (reserved "RegisteredQuery" >> return "RegisteredQuery"),
-        try (reserved "RegisteredMutation" >> return "RegisteredMutation"),
-        try (reserved "RegisteredAction" >> return "RegisteredAction")
-      ]
+    parsedType <-
+      choice
+        [ try (reserved "RegisteredQuery" >> return "RegisteredQuery"),
+          try (reserved "RegisteredMutation" >> return "RegisteredMutation"),
+          try (reserved "RegisteredAction" >> return "RegisteredAction")
+        ]
+    return (parsedName, parsedType)
 
   let fType = case fTypeStr of
         "RegisteredQuery" -> Query
@@ -246,6 +262,34 @@ registeredFunctionParser fPath = lexeme $ do
     "public" -> return $ Just (ConvexFunction fName fPath fType fArgs fReturn)
     "internal" -> return Nothing
     other -> fail $ "Unknown or unhandled visibility in d.ts file: \"" ++ other ++ "\""
+
+-- | Internal functions do not belong in generated clients. Recognize them by
+-- their Registered* header, then skip the whole declaration without requiring
+-- their argument or return types to be supported by the public-client grammar.
+internalRegisteredFunctionParser :: SchemaParser ()
+internalRegisteredFunctionParser = do
+  visibility <- try . lookAhead $ do
+    optional (try (lexeme (string "/**") *> manyTill anyChar (try (string "*/"))))
+    whiteSpace
+    reserved "export"
+    reserved "declare"
+    reserved "const"
+    void identifier
+    void $ lexeme $ char ':'
+    void $ reserved "import"
+    void $ parens stringLiteral
+    void $ lexeme $ char '.'
+    void $
+      choice
+        [ try (reserved "RegisteredQuery"),
+          try (reserved "RegisteredMutation"),
+          try (reserved "RegisteredAction")
+        ]
+    void $ lexeme $ char '<'
+    stringLiteral
+  if visibility == "internal"
+    then skippedExportParser
+    else parserZero
 
 -- | Consumes exports that we don't know how to parse by respecting
 -- nested braces/parens, so we don't stop at internal semicolons.
@@ -332,7 +376,8 @@ parseActionFile path = do
   whiteSpace
   results <-
     many
-      ( (try ((ParsedFunction <$>) <$> registeredFunctionParser path))
+      ( (try (internalRegisteredFunctionParser >> return Nothing))
+          <|> (((ParsedFunction <$>) <$> registeredFunctionParser path))
           <|> (try ((ParsedType <$>) <$> registeredTypesParser))
           <|> (try (ignoredStatementParser >> return Nothing))
           <|> (try (skippedExportParser >> return Nothing))

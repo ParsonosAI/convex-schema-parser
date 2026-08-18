@@ -266,8 +266,36 @@ nullableUnionReturnTest = "preserves Option wrappers for nullable unions" ~: Tes
     "Nullable literal union lost its Option wrapper"
     ("pub outcome: Option<types::GetPreparationReturnOutcome>" `isInfixOf` generated)
   assertBool
-    "Nullable complex union lost its Option wrapper"
-    ("pub suggested_content: Option<serde_json::Value>" `isInfixOf` generated)
+    "Nullable complex union lost its closed generated type"
+    ("pub suggested_content: Option<types::GetPreparationReturnSuggestedContent>" `isInfixOf` generated)
+  assertBool
+    "Complex union did not generate an untagged enum"
+    ("pub enum GetPreparationReturnSuggestedContent" `isInfixOf` generated && "#[serde(untagged)]" `isInfixOf` generated)
+
+rustKeywordAndNullTest :: Test
+rustKeywordAndNullTest = "escapes Rust field keywords and converts null fields" ~: TestCase $ do
+  let function =
+        Action.ConvexFunction
+          { Action.funcName = "getType",
+            Action.funcPath = "documents",
+            Action.funcType = Action.Query,
+            Action.funcArgs = [],
+            Action.funcReturn =
+              Schema.VObject
+                [ ("type", Schema.VString),
+                  ("nothing", Schema.VNull)
+                ]
+          }
+      project =
+        Convex.ParsedProject
+          { Convex.ppConstants = Map.empty,
+            Convex.ppSchema = Schema.Schema {Schema.getTables = []},
+            Convex.ppFunctions = [function]
+          }
+      generated = Rust.generateRustCode project
+  assertBool "Rust keyword field was not escaped" ("pub r#type: String" `isInfixOf` generated)
+  assertBool "Escaped field lost its serialized name" ("#[serde(rename = \"type\")]" `isInfixOf` generated)
+  assertBool "Null conversion implementation is missing" ("impl FromConvexValue for ()" `isInfixOf` generated)
 
 enumErrorVariantTest :: Test
 enumErrorVariantTest = "literal Error variant does not conflict with TryFrom Error" ~: TestCase $ do
@@ -324,6 +352,7 @@ tests =
           getAssetsFunction
           expectedGetAssetsSerializationImpl,
         nullableUnionReturnTest,
+        rustKeywordAndNullTest,
         enumErrorVariantTest,
         trailingNewlineTest
       ]

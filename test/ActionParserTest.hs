@@ -82,6 +82,7 @@ tests =
     ~: test
       [ runActionTest "parses createProject mutation" "test/api" sampleCreateProject expectedCreateProject,
         runActionTest "ignores internal actions" "test/api" sampleInternalAction [],
+        runActionTest "ignores internal actions with external empty args" "test/api" sampleInternalEmptyArgs [],
         runActionTest "parses public query with complex return" "functions/users" samplePublicGetOrgs expectedPublicGetOrgs,
         runActionTest "parses public action with optional args" "functions/stripe" samplePublicAction expectedPublicAction,
         runActionTest "parses internal action with external type as VAny" "functions/stripe" sampleStripeSubscriptionAction expectedStripeSubscriptionAction,
@@ -93,6 +94,8 @@ tests =
         runActionTest "parses update mutation with optional id arg" "test/api" sampleUpdateMutation expectedUpdateMutation,
         runActionTest "parses null in a return union" "test/api" sampleNullableReturn expectedNullableReturn,
         runActionTest "parses undefined in an optional union" "test/api" sampleOptionalUndefined expectedOptionalUndefined,
+        runActionTest "parses optional arrays in unions" "test/api" sampleOptionalArrays expectedOptionalArrays,
+        runActionTest "parses boolean literals and never arrays" "test/api" sampleBooleanAndNever expectedBooleanAndNever,
         runTypesParserTest "parses interface definition" sampleInterfaceDefinition expectedInterfaceFunction,
         runUnificationTest
           "unifies function return with named doc"
@@ -195,8 +198,51 @@ expectedOptionalUndefined =
       }
   ]
 
+sampleOptionalArrays :: String
+sampleOptionalArrays =
+  "export declare const update: import(\"convex/server\").RegisteredMutation<\"public\", { aliases?: string[] | undefined; kinds?: (\"one\" | \"two\")[] | undefined; }, Promise<void>>;"
+
+expectedOptionalArrays :: [Action.ConvexFunction]
+expectedOptionalArrays =
+  [ Action.ConvexFunction
+      { Action.funcName = "update",
+        Action.funcPath = "test/api",
+        Action.funcType = Action.Mutation,
+        Action.funcArgs =
+          [ ("aliases", Schema.VOptional (Schema.VArray Schema.VString)),
+            ( "kinds",
+              Schema.VOptional
+                (Schema.VArray (Schema.VUnion [Schema.VLiteral "one", Schema.VLiteral "two"]))
+            )
+          ],
+        Action.funcReturn = Schema.VVoid
+      }
+  ]
+
+sampleBooleanAndNever :: String
+sampleBooleanAndNever =
+  "export declare const page: import(\"convex/server\").RegisteredQuery<\"public\", {}, Promise<{ active: false; entries: never[]; } | { active: true; entries: string[]; }>>;"
+
+expectedBooleanAndNever :: [Action.ConvexFunction]
+expectedBooleanAndNever =
+  [ Action.ConvexFunction
+      { Action.funcName = "page",
+        Action.funcPath = "test/api",
+        Action.funcType = Action.Query,
+        Action.funcArgs = [],
+        Action.funcReturn =
+          Schema.VUnion
+            [ Schema.VObject [("active", Schema.VBoolean), ("entries", Schema.VArray Schema.VAny)],
+              Schema.VObject [("active", Schema.VBoolean), ("entries", Schema.VArray Schema.VString)]
+            ]
+      }
+  ]
+
 sampleInternalAction :: String
 sampleInternalAction = "export declare const sendOtp: import(\"convex/server\").RegisteredAction<\"internal\", { email: string; }, Promise<{ success: boolean; }>>;"
+
+sampleInternalEmptyArgs :: String
+sampleInternalEmptyArgs = "export declare const cleanup: import(\"convex/dist/esm-types/server\").RegisteredMutation<\"internal\", import(\"convex/dist/esm-types/server/registration\").EmptyObject, Promise<Record<string, unknown>>>;"
 
 samplePublicGetOrgs :: String
 samplePublicGetOrgs =
