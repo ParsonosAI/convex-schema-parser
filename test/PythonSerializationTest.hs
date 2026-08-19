@@ -77,10 +77,63 @@ testDistinctUnionModels = "generates distinct models for object union branches" 
     generated
   assertContains "expected_revision: float | None = Field(...)" generated
   assertContains "verbatim_text: str | None = Field(...)" generated
-  assertContains "\"content\" : _to_convex(self.content)" generated
+  assertContains "payload[\"content\"] = _to_convex(self.content)" generated
   assertContains
     "TypeAdapter(list[Upsert_proofing_notesReturnVariant1Object | Upsert_proofing_notesReturnVariant2Object]).validate_python(raw_result)"
     generated
+
+optionalSerializationFunction :: Action.ConvexFunction
+optionalSerializationFunction =
+  Action.ConvexFunction
+    { Action.funcName = "update",
+      Action.funcPath = "admin/actions",
+      Action.funcType = Action.Mutation,
+      Action.funcArgs =
+        [ ("optional_count", Schema.VOptional Schema.VNumber),
+          ("optional_note", Schema.VOptional (Schema.VUnion [Schema.VString, Schema.VNull])),
+          ( "payload",
+            Schema.VObject
+              [ ("required_nullable", Schema.VUnion [Schema.VString, Schema.VNull]),
+                ("optional_scalar", Schema.VOptional Schema.VString),
+                ("optional_array", Schema.VOptional (Schema.VArray Schema.VString)),
+                ("optional_nullable", Schema.VOptional (Schema.VUnion [Schema.VString, Schema.VNull])),
+                ("optional_nullable_ref", Schema.VOptional (Schema.VReference "nullableString"))
+              ]
+          )
+        ],
+      Action.funcReturn = Schema.VVoid
+    }
+
+testOptionalAndNullableSerialization :: Test
+testOptionalAndNullableSerialization = "preserves optional and nullable serialization semantics" ~: TestCase $ do
+  let project =
+        Convex.ParsedProject
+          { Convex.ppConstants =
+              Map.fromList
+                [("nullableString", Schema.VUnion [Schema.VString, Schema.VNull])],
+            Convex.ppSchema = Schema.Schema {Schema.getTables = []},
+            Convex.ppFunctions = [optionalSerializationFunction]
+          }
+      generated = Python.generatePythonCode project
+
+  assertContains "required_nullable: str | None = Field(...)" generated
+  assertContains "optional_scalar: str | None = Field(default=None)" generated
+  assertContains "optional_array: list[str] | None = Field(default=None)" generated
+  assertContains "optional_nullable: str | None = Field(default=None)" generated
+  assertContains "payload[\"required_nullable\"] = _to_convex(self.required_nullable)" generated
+  assertContains "if self.optional_scalar is not None:" generated
+  assertContains "payload[\"optional_scalar\"] = self.optional_scalar" generated
+  assertContains "if self.optional_array is not None:" generated
+  assertContains "payload[\"optional_array\"] = [item for item in self.optional_array]" generated
+  assertContains "if self.optional_nullable is not None or \"optional_nullable\" in self.model_fields_set:" generated
+  assertContains "if self.optional_nullable_ref is not None or \"optional_nullable_ref\" in self.model_fields_set:" generated
+  assertContains "optional_count: float | None = None" generated
+  assertContains "optional_note: str | None | UnsetType = UNSET" generated
+  assertContains "if optional_count is not None:" generated
+  assertContains "if not isinstance(optional_note, UnsetType):" generated
+  assertBool
+    "Optional arrays must not be serialized unconditionally"
+    (not ("payload[\"optional_array\"] = [item for item in self.optional_array]\n        return payload" `isInfixOf` generated))
 
 testMutuallyReferencingTableIds :: Test
 testMutuallyReferencingTableIds = "generates mutually referencing table IDs" ~: TestCase $ do
@@ -121,5 +174,6 @@ tests =
   "Python Serialization"
     ~: TestList
       [ testDistinctUnionModels,
+        testOptionalAndNullableSerialization,
         testMutuallyReferencingTableIds
       ]
